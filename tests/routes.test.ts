@@ -464,8 +464,8 @@ describe("private data stays out of errors, logs and caches", () => {
     expect(body).toEqual({
       deployment: "local",
       signIn: "ready",
-      storage: "memory-fixture",
-      durableStorage: false,
+      storage: h.store.kind,
+      durableStorage: h.store.durable,
       agentAccess: "disabled",
     });
   });

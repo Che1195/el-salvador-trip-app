@@ -26,6 +26,14 @@ This repository is public. It holds code and fictitious sample data only.
 - Agents must not be able to remove records. Do not add a tool or a path that
   lets one, and keep the guard in `commitChange`.
 - The in-memory store is a local fixture. Do not make production fall back to it.
+- Schema changes are new numbered files in `db/migrations`. Never edit an
+  applied migration, and never put data in one. Never run `db:migrate` against
+  a hosted database, and never ask for or handle a connection string: the
+  database owner runs it.
+- Store changes must pass `tests/store-contract.test.ts` on both stores.
+- Remote agent access stays off in deployed environments. Nothing outside
+  tests may construct the OAuth authenticator until an integration has been
+  verified end to end and the owner approves.
 - Read [docs/spec.md](docs/spec.md) before starting, and update it when scope,
   a decision, or the next action changes.
 - Use bun. Verify with `bun run check`.

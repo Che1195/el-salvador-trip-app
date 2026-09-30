@@ -78,12 +78,20 @@ export interface AgentGrant {
   scopes: Scope[];
 }
 
+/** Who an OAuth authorization server says the caller is. */
+export interface OAuthIdentity {
+  issuer: string;
+  subject: string;
+}
+
 export interface AgentRecord {
   id: string;
   name: string;
   grants: AgentGrant[];
   /** SHA-256 of the agent's credential. The credential itself is never stored. */
   credentialHash: string | null;
+  /** Set for agents that sign in through an OAuth authorization server. */
+  oauth: OAuthIdentity | null;
   createdAt: string;
   revokedAt: string | null;
 }
@@ -106,6 +114,11 @@ export interface StoreTx {
     kind: EntityKind,
     options?: { includeDeleted?: boolean },
   ): Promise<StoredEntity[]>;
+  /**
+   * Inserts a record at revision 1, or replaces the stored record with its
+   * next revision. Anything else (a skipped or repeated revision) throws
+   * StaleWriteError: it means a write was based on an outdated read.
+   */
   putEntity(entity: StoredEntity): Promise<void>;
 
   appendChange(change: ChangeRecord): Promise<void>;
@@ -127,8 +140,17 @@ export interface StoreTx {
 
   getAgent(id: string): Promise<AgentRecord | null>;
   getAgentByCredentialHash(hash: string): Promise<AgentRecord | null>;
+  getAgentByOAuthIdentity(identity: OAuthIdentity): Promise<AgentRecord | null>;
   listAgents(tripId: string): Promise<AgentRecord[]>;
   putAgent(agent: AgentRecord): Promise<void>;
+}
+
+/** A write whose revision does not follow the stored one. Never expected; a last line of defense. */
+export class StaleWriteError extends Error {
+  constructor(entityId: string) {
+    super(`stale write refused for ${entityId}`);
+    this.name = "StaleWriteError";
+  }
 }
 
 export interface Store {

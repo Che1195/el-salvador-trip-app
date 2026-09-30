@@ -32,6 +32,8 @@ export type AuthConfig =
 
 export type StorageConfig =
   | { mode: "fixture"; scope: Exclude<DataScope, "production"> }
+  /** The connection string is a secret: never log it or include it in a response. */
+  | { mode: "postgres"; connectionString: string }
   | { mode: "unconfigured"; reason: string };
 
 export type AgentAuthConfig =
@@ -126,7 +128,28 @@ async function resolveAuth(env: Env, deployment: Deployment): Promise<AuthConfig
   };
 }
 
+const TLS_MODES = new Set(["require", "verify-ca", "verify-full"]);
+
+function resolvePostgres(connectionString: string, deployment: Deployment): StorageConfig {
+  let url: URL;
+  try {
+    url = new URL(connectionString);
+  } catch {
+    return { mode: "unconfigured", reason: "DATABASE_URL is not a valid URL." };
+  }
+  if (url.protocol !== "postgres:" && url.protocol !== "postgresql:") {
+    return { mode: "unconfigured", reason: "DATABASE_URL must be a postgres:// URL." };
+  }
+  if (deployment !== "local" && !TLS_MODES.has(url.searchParams.get("sslmode") ?? "")) {
+    return { mode: "unconfigured", reason: "DATABASE_URL must require TLS (sslmode=require)." };
+  }
+  return { mode: "postgres", connectionString };
+}
+
 function resolveStorage(env: Env, deployment: Deployment): StorageConfig {
+  // A configured database always wins. Whether this deployment may use it is
+  // decided later, from the environment marker stored in the database itself.
+  if (env.DATABASE_URL) return resolvePostgres(env.DATABASE_URL, deployment);
   if (deployment === "local") return { mode: "fixture", scope: "local" };
   if (deployment === "preview" && env.TRIP_FIXTURE_PREVIEW === "1") {
     // A preview may opt in to the sample fixture. Production never can.

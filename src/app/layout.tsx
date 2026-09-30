@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import type { ReactNode } from "react";
 import { Archivo } from "next/font/google";
 import "./globals.css";
 
@@ -21,7 +22,7 @@ export const viewport: Viewport = {
   themeColor: "#26358c",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" className={`${archivo.variable} antialiased`}>
       <body>{children}</body>

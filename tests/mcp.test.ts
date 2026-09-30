@@ -144,7 +144,7 @@ describe("agent credentials", () => {
     const token = randomBytes(32).toString("base64url");
     const { sha256Hex } = await import("@/server/hash");
     await h.store.transaction((tx) =>
-      tx.putAgent({ id: "agent_other_trip", name: "Other", grants: [{ tripId: "trip_other", scopes: ALL_SCOPES }], credentialHash: sha256Hex(token), createdAt: h.now().toISOString(), revokedAt: null }),
+      tx.putAgent({ id: "agent_other_trip", name: "Other", grants: [{ tripId: "trip_other", scopes: ALL_SCOPES }], credentialHash: sha256Hex(token), oauth: null, createdAt: h.now().toISOString(), revokedAt: null }),
     );
     expect((await handleMcpRequest(rawInitialize({ Authorization: `Bearer ${token}` }), h.deps)).status).toBe(401);
   });

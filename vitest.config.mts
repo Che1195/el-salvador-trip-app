@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
-export default defineConfig({
+const shared = {
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -9,9 +9,27 @@ export default defineConfig({
       "server-only": fileURLToPath(new URL("./tests/support/server-only.ts", import.meta.url)),
     },
   },
+};
+
+export default defineConfig({
+  ...shared,
   test: {
-    environment: "node",
-    include: ["tests/**/*.test.ts"],
-    testTimeout: 15000,
+    projects: [
+      {
+        ...shared,
+        test: { name: "memory", environment: "node", include: ["tests/**/*.test.ts"], testTimeout: 15000 },
+      },
+      {
+        // The same behavior tests again, with the Postgres store underneath.
+        ...shared,
+        test: {
+          name: "postgres",
+          environment: "node",
+          include: ["tests/operations.test.ts", "tests/mcp.test.ts", "tests/routes.test.ts", "tests/oauth.test.ts"],
+          env: { TRIP_TEST_STORE: "pglite" },
+          testTimeout: 60000,
+        },
+      },
+    ],
   },
 });

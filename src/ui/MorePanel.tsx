@@ -15,6 +15,7 @@ const OP_PHRASE: Record<string, string> = {
   undo_change: "undid a change to a",
   undo_batch: "undid changes to a",
   update_trip: "edited the",
+  create_trip: "set up the",
   revoke_agent: "revoked an agent",
   sign_in: "signed in",
   sign_out: "signed out",

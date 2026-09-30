@@ -1,8 +1,10 @@
 import { redirect } from "next/navigation";
 import { getDeps } from "@/server/deps";
+import { DomainError } from "@/server/errors";
 import { getTripSnapshot } from "@/server/operations";
 import { getPageSession } from "@/server/page-session";
 import { SetupNotice } from "@/ui/SetupNotice";
+import { TripSetup } from "@/ui/TripSetup";
 import { Workspace } from "@/ui/Workspace";
 
 // Rendered per request, after the session check. Trip data never reaches the
@@ -21,7 +23,12 @@ export default async function TripPage() {
     tripId: deps.config.tripId,
     store: session.store,
     now: deps.clock(),
+  }).catch((error: unknown) => {
+    // A new, empty database has no trip record yet.
+    if (error instanceof DomainError && error.code === "not_found") return null;
+    throw error;
   });
+  if (!snapshot) return <TripSetup />;
 
   return (
     <Workspace

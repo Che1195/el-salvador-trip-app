@@ -4,6 +4,10 @@
 // database. `selectStorage` in ../config.ts refuses to use it in production.
 
 import type { EntityKind } from "@/domain/model";
+import {
+  StaleWriteError,
+  type OAuthIdentity,
+} from "./types";
 import type {
   AgentRecord,
   AuditQuery,
@@ -52,6 +56,8 @@ class MemoryTx implements StoreTx {
   }
 
   async putEntity(entity: StoredEntity) {
+    const stored = this.state.entities.get(key(entity.tripId, entity.id));
+    if (entity.revision !== (stored?.revision ?? 0) + 1) throw new StaleWriteError(entity.id);
     this.state.entities.set(key(entity.tripId, entity.id), copy(entity));
   }
 
@@ -123,6 +129,13 @@ class MemoryTx implements StoreTx {
   async getAgentByCredentialHash(hash: string) {
     for (const agent of this.state.agents.values()) {
       if (agent.credentialHash !== null && agent.credentialHash === hash) return copy(agent);
+    }
+    return null;
+  }
+
+  async getAgentByOAuthIdentity(identity: OAuthIdentity) {
+    for (const agent of this.state.agents.values()) {
+      if (agent.oauth?.issuer === identity.issuer && agent.oauth.subject === identity.subject) return copy(agent);
     }
     return null;
   }

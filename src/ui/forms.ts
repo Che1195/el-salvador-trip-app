@@ -118,7 +118,7 @@ export const FORM_FIELDS: Record<EntityKind, Field[]> = {
 export type FormValues = Record<string, string | boolean>;
 
 /** Starting values for a new item. */
-export function blankValues(kind: EntityKind, trip: TripData): FormValues {
+export function blankValues(kind: EntityKind, trip?: TripData): FormValues {
   const values: FormValues = {};
   for (const field of FORM_FIELDS[kind]) {
     if (field.type === "checkbox") values[field.key] = false;
@@ -126,7 +126,7 @@ export function blankValues(kind: EntityKind, trip: TripData): FormValues {
     else if (field.type === "int") values[field.key] = "1";
     else values[field.key] = "";
   }
-  if (kind === "itinerary") values.day = trip.startDate;
+  if (kind === "itinerary" && trip) values.day = trip.startDate;
   return values;
 }
 

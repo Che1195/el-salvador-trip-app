@@ -208,6 +208,9 @@ async function commitChange(
   if (removes && ctx.principal.type !== "web") {
     throw new DomainError("forbidden", "Only a person in the app can remove items.");
   }
+  if (args.kind === "trip" && args.deletedAt !== null) {
+    throw new DomainError("forbidden", "The trip itself cannot be removed.");
+  }
   const at = iso(ctx.now);
   const entity: StoredEntity = {
     tripId: ctx.tripId,
@@ -608,6 +611,36 @@ const definitions: OperationDef[] = [
   }),
 
   defineOp({
+    name: "create_trip",
+    title: "Set up the trip",
+    description: "Creates this trip's own record: name, destination, dates, travelers. Only possible while none exists.",
+    audience: "web",
+    mutating: true,
+    destructive: false,
+    anyOfScopes: [],
+    input: z.strictObject({ data: dataObjectSchema, idempotencyKey }),
+    async run(ctx, input) {
+      const data = validateData("trip", input.data);
+      return runMutation(ctx, "create_trip", input, async (tx) => {
+        if (await tx.getEntity(ctx.tripId, ctx.tripId)) {
+          throw new DomainError("conflict", "This trip is already set up.");
+        }
+        return changed(
+          ctx,
+          await commitChange(tx, ctx, "create_trip", {
+            before: null,
+            id: ctx.tripId,
+            kind: "trip",
+            data,
+            deletedAt: null,
+            action: "create",
+          }),
+        );
+      });
+    },
+  }),
+
+  defineOp({
     name: "update_trip",
     title: "Edit the trip's details",
     description:
@@ -984,6 +1017,8 @@ async function undoBatch(
 
   const undone: JsonObject[] = [];
   for (const { live, target } of plans) {
+    // Setting up the trip is not something a batch undo takes back.
+    if (live.kind === "trip" && target === null) continue;
     const alreadyThere = target
       ? live.deletedAt === target.deletedAt &&
         stableStringify(live.data) === stableStringify(target.data)

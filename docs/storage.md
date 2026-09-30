@@ -1,70 +1,139 @@
 # Storage
 
-Status: **nothing is provisioned.** The app runs on an in-memory fixture. This
-page records the recommendation and what has to happen before real data.
+Status: **the Postgres store is built and tested without a server. No
+database is provisioned or connected.** Nothing here has run against a real
+Postgres.
 
-## What runs today
+## Two stores, one contract
 
-`src/server/store/memory.ts` is a local development fixture. It keeps data in
-one process's memory, so data is lost on restart and is not shared between
-devices or server instances. It is not the durable cross-device storage the
-packing list needs.
+Both implement `Store` in `src/server/store/types.ts`, and
+`tests/store-contract.test.ts` runs the same tests against both.
 
-- Local development: used by default, seeded with the fictitious sample trip.
-- Preview: used only if `TRIP_FIXTURE_PREVIEW=1`. On a serverless host each
-  instance has its own memory, so a fixture preview is a demo and may sign you
-  out or lose edits between requests.
-- Production: never. The store's constructor, the sample seeder and the
-  configuration loader each refuse it independently.
+| Store | Where | Durable |
+|---|---|---|
+| `MemoryFixtureStore` | Local development and tests. A preview only if `TRIP_FIXTURE_PREVIEW=1` | No: one process's memory, lost on restart, not shared between devices or instances |
+| `PostgresStore` | Any environment with `DATABASE_URL` set | Yes |
+
+Production never uses the fixture. The store's constructor, the sample
+seeder and the configuration loader each refuse it independently.
+
+## How the Postgres store is tested
+
+The tests run on PGlite, a Postgres compiled to WebAssembly that runs inside
+the test process. There is no server, no network and no credential.
+
+- `tests/store-contract.test.ts`: the storage contract on both stores.
+- `tests/postgres-store.test.ts`: migrations, the environment marker,
+  startup checks, retries, durable rate limits, configuration, the migrate
+  command.
+- The "postgres" test project reruns the operation, route, MCP and OAuth
+  suites with the Postgres store underneath.
+
+What this cannot show: PGlite has one connection, so its transactions never
+overlap. Real collisions between concurrent transactions only happen on a
+server. The retry logic for them is tested with a scripted database that
+fails on cue; it has not met a real serialization failure.
+
+## Design
+
+**Isolation.** Every transaction is SERIALIZABLE. The operations read and
+then write (check a revision, count a list, look up an idempotency key), and
+serializable isolation makes each of those behave as if nothing else ran at
+the same time.
+
+**Retries.** When Postgres aborts a transaction because of a concurrent one
+(SQLSTATE 40001 serialization failure, 40P01 deadlock, or 23505 unique
+violation from two simultaneous inserts), nothing was kept, so the whole
+transaction runs again: up to 5 attempts, with a growing, randomized wait.
+Other errors are not retried.
+
+**Stale writes.** Besides the revision check in the operations, the store
+itself refuses to save a revision that does not directly follow the stored
+one.
+
+**Rate limits.** One row per key per time window, incremented by a single
+atomic statement, so the count is shared by every server instance. Windows
+older than a day are deleted as new ones open.
+
+**Environment marker.** Each database stores which environment it belongs
+to (`meta.data_scope`: production, preview or local). It is written once by
+the migrate command and can never be changed to another value. On startup the
+app reads it, and `storeMatchesDeployment` in `src/server/deps.ts` refuses a
+database whose marker differs from the deployment. A preview given
+production's connection string by mistake would refuse to serve.
+
+**Schema version.** The app checks that the database is at exactly the
+migration version the code expects (`EXPECTED_SCHEMA_VERSION`) and refuses
+otherwise. The app never changes the schema itself.
+
+**TLS.** In deployments, `DATABASE_URL` must say `sslmode=require` (or
+stricter), and the app then also verifies the server's certificate
+explicitly, rather than relying on how the driver version reads `sslmode`.
+
+**Secrets.** The connection string is read from the deployment's environment
+at runtime. It is never logged, returned, or included in an error. Startup
+failures log a fixed reason only (`connection_failed`, `schema_missing`,
+`schema_version_mismatch`, `scope_marker_missing`).
+
+## Migrations
+
+Files in `db/migrations`, numbered `0001_name.sql`, applied in order. The
+runner records a checksum for each and refuses to continue if an applied file
+was edited or if the database is ahead of the code. Each file runs in its own
+transaction. Migrations hold structure only, never data.
 
 ## Recommendation: Neon Postgres, Free plan
 
-Checked against [neon.com/pricing](https://neon.com/pricing) on 2026-09-30.
+Approved by the owner. Checked against
+[neon.com/pricing](https://neon.com/pricing) on 2026-09-30: $0 per month, no
+credit card; 0.5 GB storage, 100 CU-hours and 5 GB transfer per project per
+month; scales to zero after 5 minutes idle; 6-hour restore window. Over a
+limit, compute is suspended or writes are blocked until the next month;
+nothing is deleted or charged.
 
-| | Neon Free |
-|---|---|
-| Price | $0 per month, no credit card |
-| Projects | 100 |
-| Storage | 0.5 GB per project |
-| Compute | 100 CU-hours per project per month |
-| Idle behavior | Scales to zero after 5 minutes; this cannot be turned off, so the first request after idle is slower |
-| Data transfer | 5 GB per project |
-| Restore window | 6 hours |
-| Branches | 10 per project |
-| Over a limit | Compute is suspended, or writes are blocked, until the next month. Data is not deleted and nothing is charged |
+Use **two separate Neon projects**, production and preview, each with its own
+connection string, set in Vercel for that environment only. Avoid the
+integration's automatic preview branches: a branch starts as a copy of
+production. The preview database holds fixtures only.
 
-A trip's data is a few megabytes, so the limits are not a concern. The 6-hour
-restore window is short: the app's own change history (every edit keeps the
-previous version) is the main recovery tool, not the database's.
+## Setting up a database
 
-Access it needs: a Neon account and acceptance of Neon's terms. That is a step
-for the account owner. No one else needs database access; the second traveler
-uses the app, not the database.
+For the database owner. Not done yet.
 
-## Keeping preview away from production
+1. Create the Neon project and copy its pooled connection string.
+2. In your own terminal, load the connection string without it being shown
+   or saved in your shell history (paste, then press Return):
 
-Use **two separate Neon projects**, one for production and one for preview,
-each with its own connection string, set in Vercel for that environment only.
+```bash
+read -rs DATABASE_URL && export DATABASE_URL
+```
 
-Avoid the Vercel-Neon integration's automatic preview branches. A Neon branch
-starts as a copy of its parent, so every preview deployment would hold a copy
-of the real trip.
+3. Preview what would change. Nothing is written:
 
-The app enforces the separation itself as well. Each database carries a
-`data_scope` marker (`db/schema.sql`, table `meta`). A store reports that
-scope, and `storeMatchesDeployment` in `src/server/deps.ts` refuses any store
-whose scope differs from the deployment's. A preview given production's
-connection string by mistake would refuse to serve.
+```bash
+bun run db:migrate -- --scope preview --dry-run
+```
 
-The preview database holds fixtures only.
+4. Apply it. For the preview database, `--seed-sample` also loads the
+   fictitious sample trip:
 
-## What is left to build
+```bash
+bun run db:migrate -- --scope preview --seed-sample
+```
 
-1. A Postgres implementation of the `Store` interface
-   (`src/server/store/types.ts`), using `db/schema.sql`. Transactions must be
-   serializable or lock the rows they read, because the operations rely on
-   read-then-write being atomic.
-2. Tests for it against a real Postgres, run on the preview project.
-3. A private, one-time seed of the real trip. It is never committed.
+   For production, use `--scope production --confirm-production`. Sample data
+   is refused there.
+5. Clear it from the shell:
 
-`db/schema.sql` is a draft. It has not been run anywhere.
+```bash
+unset DATABASE_URL
+```
+
+6. Set the same connection string as `DATABASE_URL` in Vercel, for that
+   environment only.
+7. Open `/api/health` on the deployment. `"storage": "postgres"` confirms it
+   worked. `not_configured` means the app refused the database; the Vercel
+   function log names the reason.
+
+A new production database has no trip. The first person to sign in is asked
+for the trip's name, destination and dates.

@@ -6,7 +6,10 @@ import { buildDeps, type Deps } from "@/server/deps";
 import { sha256Hex } from "@/server/hash";
 import { handleLogin } from "@/server/handlers";
 import type { OpContext, Principal } from "@/server/operations";
+import { seedSampleTrip } from "@/server/sample-data";
+import { PostgresStore } from "@/server/store/postgres";
 import type { Store } from "@/server/store/types";
+import { cleanSharedDatabase } from "./pglite";
 
 export const ORIGIN = "http://localhost:3000";
 export const START = new Date("2031-03-01T12:00:00.000Z");
@@ -20,11 +23,27 @@ export interface Harness {
   now(): Date;
 }
 
-/** Local fixture app with sample data and a controllable clock. */
+/** Set by the "postgres" test project: run the same tests on the Postgres store. */
+export const ON_POSTGRES = process.env.TRIP_TEST_STORE === "pglite";
+
+async function samplePostgresStore(tripId: string, now: Date): Promise<Store> {
+  const store = await PostgresStore.open(await cleanSharedDatabase());
+  await seedSampleTrip(store, tripId, now);
+  return store;
+}
+
+/**
+ * Local app with the sample trip and a controllable clock, on the in-memory
+ * fixture or, in the "postgres" test project, on an in-process Postgres.
+ * Each call starts from clean data.
+ */
 export async function makeHarness(env: Env = {}): Promise<Harness> {
   let current = START.getTime();
-  const deps = await buildDeps({ NODE_ENV: "test", ...env }, () => new Date(current));
-  if (!deps.store) throw new Error("expected the local fixture store");
+  const clock = () => new Date(current);
+  const deps = ON_POSTGRES
+    ? await buildDeps({ NODE_ENV: "test", ...env }, clock, (config, now) => samplePostgresStore(config.tripId, now()))
+    : await buildDeps({ NODE_ENV: "test", ...env }, clock);
+  if (!deps.store) throw new Error("expected a store");
   const store = deps.store;
   return {
     deps: { ...deps, store },
@@ -107,6 +126,7 @@ export async function addFixtureAgent(
       name: `Agent ${id}`,
       grants: [{ tripId: h.tripId, scopes }],
       credentialHash: sha256Hex(token),
+      oauth: null,
       createdAt: h.now().toISOString(),
       revokedAt: null,
     }),

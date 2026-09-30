@@ -3,7 +3,7 @@ import type { Item, PackingData, TripSnapshot } from "@/domain/model";
 import { DomainError } from "@/server/errors";
 import { executeOperation, getTripSnapshot, MAX_ITEMS_PER_SECTION, OPERATIONS } from "@/server/operations";
 import { seedSampleTrip } from "@/server/sample-data";
-import { agentPrincipal, ctxFor, key, makeHarness, webPrincipal, type Harness } from "./support/harness";
+import { agentPrincipal, ctxFor, key, makeHarness, ON_POSTGRES, webPrincipal, type Harness } from "./support/harness";
 
 type Result = Record<string, unknown> & { item?: Item<Record<string, unknown>>; changeId?: string; batchId?: string };
 
@@ -35,7 +35,8 @@ describe("reading the trip", () => {
     const trip = await snapshot(h);
     expect(trip.trip.data.isSample).toBe(true);
     expect(trip.itinerary.length).toBeGreaterThan(0);
-    expect(trip.storage).toEqual({ kind: "memory-fixture", durable: false });
+    expect(trip.storage).toEqual({ kind: h.store.kind, durable: h.store.durable });
+    expect(h.store.kind).toBe(ON_POSTGRES ? "postgres" : "memory-fixture");
     // Sample lines: 2x412.50 booked, 4x98 booked, 2x45 + 2x30 + 5x60 selected, 3x55.75 considering.
     expect(trip.budget.totals.byStatus).toEqual({ considering: 16725, selected: 45000, booked: 121700 });
     expect(trip.budget.totals.committedCents).toBe(166700);
@@ -198,7 +199,7 @@ describe("conflicts and concurrent writes", () => {
     await expect(
       h.store.transaction(async (tx) => {
         const entity = (await tx.getEntity(h.tripId, before[0].id))!;
-        await tx.putEntity({ ...entity, revision: 99 });
+        await tx.putEntity({ ...entity, revision: entity.revision + 1 });
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
@@ -633,10 +634,10 @@ describe("agents can be revoked from the app", () => {
   it("lists agents for this trip and revokes one after confirmation", async () => {
     const h = await makeHarness();
     await h.store.transaction((tx) =>
-      tx.putAgent({ id: "agent_a", name: "Agent A", grants: [{ tripId: h.tripId, scopes: ["trip:read"] }], credentialHash: null, createdAt: h.now().toISOString(), revokedAt: null }),
+      tx.putAgent({ id: "agent_a", name: "Agent A", grants: [{ tripId: h.tripId, scopes: ["trip:read"] }], credentialHash: null, oauth: null, createdAt: h.now().toISOString(), revokedAt: null }),
     );
     await h.store.transaction((tx) =>
-      tx.putAgent({ id: "agent_elsewhere", name: "Other trip", grants: [{ tripId: "trip_other", scopes: ["trip:read"] }], credentialHash: null, createdAt: h.now().toISOString(), revokedAt: null }),
+      tx.putAgent({ id: "agent_elsewhere", name: "Other trip", grants: [{ tripId: "trip_other", scopes: ["trip:read"] }], credentialHash: null, oauth: null, createdAt: h.now().toISOString(), revokedAt: null }),
     );
     const web = webPrincipal(h);
     const listed = (await run(h, web, "list_agents", {})).agents as { id: string; revokedAt: string | null }[];
