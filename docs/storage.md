@@ -73,7 +73,12 @@ explicitly, rather than relying on how the driver version reads `sslmode`.
 **Secrets.** The connection string is read from the deployment's environment
 at runtime. It is never logged, returned, or included in an error. Startup
 failures log a fixed reason only (`connection_failed`, `schema_missing`,
-`schema_version_mismatch`, `scope_marker_missing`).
+`schema_version_mismatch`, `scope_marker_missing`). The migrate command prints its own refusals
+(which hold only migration numbers, file names and environment names) or a
+fixed sentence with an error code such as `28P01`. It never prints a
+driver's message, stack or detail, since any of them can quote the connection
+string, user, host or database name. `tests/migrate-errors.test.ts` runs the
+real script to check this.
 
 ## Migrations
 

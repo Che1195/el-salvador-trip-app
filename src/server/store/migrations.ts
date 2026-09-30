@@ -12,6 +12,19 @@ import { join } from "node:path";
 import { sqlState, type SqlDatabase, type SqlExecutor } from "./sql";
 import type { DataScope } from "./types";
 
+/**
+ * A refusal written by this code, whose message holds only migration numbers,
+ * file names and environment names. Only these messages are ever shown by the
+ * migrate command. Anything else, such as a driver error, can quote the
+ * connection string, a user name or a host, and is replaced by a fixed text.
+ */
+export class MigrationRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MigrationRefusal";
+  }
+}
+
 /** The schema version this build of the app is written against. */
 export const EXPECTED_SCHEMA_VERSION = 1;
 
@@ -28,7 +41,7 @@ const FILE_PATTERN = /^(\d{4})_([a-z0-9_]+)\.sql$/;
 
 export function parseMigration(filename: string, sql: string): Migration {
   const match = FILE_PATTERN.exec(filename);
-  if (!match) throw new Error(`Migration file name must look like 0001_name.sql: ${filename}`);
+  if (!match) throw new MigrationRefusal(`Migration file name must look like 0001_name.sql: ${filename}`);
   return {
     version: Number(match[1]),
     name: match[2],
@@ -45,7 +58,7 @@ export function loadMigrations(directory: string): Migration[] {
     .map((name) => parseMigration(name, readFileSync(join(directory, name), "utf8")));
   migrations.forEach((migration, index) => {
     if (migration.version !== index + 1) {
-      throw new Error(`Migrations must be numbered 0001, 0002, ... with no gaps; found ${migration.version}.`);
+      throw new MigrationRefusal(`Migrations must be numbered 0001, 0002, ... with no gaps; found ${migration.version}.`);
     }
   });
   return migrations;
@@ -81,15 +94,15 @@ export async function currentSchemaVersion(db: SqlExecutor): Promise<number> {
 export async function pendingMigrations(db: SqlExecutor, migrations: readonly Migration[]): Promise<Migration[]> {
   const applied = await appliedRows(db);
   applied.forEach((row, index) => {
-    if (row.version !== index + 1) throw new Error("The database's migration history has a gap.");
+    if (row.version !== index + 1) throw new MigrationRefusal("The database's migration history has a gap.");
   });
   for (const row of applied) {
     const known = migrations.find((migration) => migration.version === row.version);
     if (!known) {
-      throw new Error(`The database is at migration ${row.version}, which this code does not have.`);
+      throw new MigrationRefusal(`The database is at migration ${row.version}, which this code does not have.`);
     }
     if (known.checksum !== row.checksum) {
-      throw new Error(`Migration ${row.version} was changed after it was applied. Add a new migration instead.`);
+      throw new MigrationRefusal(`Migration ${row.version} was changed after it was applied. Add a new migration instead.`);
     }
   }
   return migrations.filter((migration) => migration.version > applied.length);
@@ -135,7 +148,7 @@ export async function readDataScope(db: SqlExecutor): Promise<DataScope | null> 
  * database does not change environments.
  */
 export async function initializeDataScope(db: SqlDatabase, scope: DataScope): Promise<void> {
-  if (!DATA_SCOPES.includes(scope)) throw new Error("Scope must be local, preview or production.");
+  if (!DATA_SCOPES.includes(scope)) throw new MigrationRefusal("Scope must be local, preview or production.");
   await db.transaction(async (tx) => {
     const existing = await tx.query<{ value: string }>("SELECT value FROM meta WHERE key = 'data_scope'");
     if (existing.rows.length === 0) {
@@ -143,7 +156,8 @@ export async function initializeDataScope(db: SqlDatabase, scope: DataScope): Pr
       return;
     }
     if (existing.rows[0].value !== scope) {
-      throw new Error(`This database is already marked "${existing.rows[0].value}" and cannot become "${scope}".`);
+      const current = asScope(existing.rows[0].value) ?? "another environment";
+      throw new MigrationRefusal(`This database is already marked "${current}" and cannot become "${scope}".`);
     }
   });
 }
