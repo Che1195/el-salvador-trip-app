@@ -83,6 +83,11 @@ Each needs a decision or an action from the owner before work continues.
    gates 1 and 2.
 6. **Browser check.** No browser test has been run. The interface has only
    been exercised over HTTP.
+7. **Hosting.** The Vercel project has no environment variables and no
+   database. Preview URLs sit behind Vercel sign-in, so only the Vercel
+   account owner can open them. Whether commits authored by the collaborator
+   deploy on the Hobby plan is untested. After this branch merges, `main`
+   deploys to production and refuses every request until gates 1 and 2 are done.
 
 ## Accepted risks
 
