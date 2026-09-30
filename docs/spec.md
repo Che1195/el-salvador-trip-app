@@ -1,7 +1,9 @@
 # Trip planner: specification
 
-Status: initial build. Runs on a local fixture; the Postgres store is built and
-tested without a server. Last updated 2026-09-30.
+Status: initial build merged to `main` (PR #1, 2026-09-30). Production is
+live at https://el-salvador-trip-app.vercel.app and refuses every data request
+until storage and secrets are set. Locally the app runs on a fixture; the
+Postgres store is built and tested without a server. Last updated 2026-09-30.
 
 This file is the single record of what was agreed. Update it whenever scope,
 a decision, or the next action changes.
@@ -46,7 +48,8 @@ two people.
 |---|---|---|
 | Stack | Next.js 16, Tailwind 4, TypeScript, bun, Vercel | Requested |
 | Storage | New Neon Postgres, Free plan; two separate projects (production, preview) | $0, no card, fits the data size. Approved by the owner; not yet connected |
-| Hosting | Vercel, Hobby plan. Project created and linked through the existing GitHub integration; no environment variables set | Requested |
+| Hosting | Vercel, Hobby plan, linked through the existing GitHub integration. `main` deploys to production; other branches get previews. No environment variables set | Requested |
+| Code review | The owner reviews the collaborator's pull requests. The owner's own pull requests may merge without a reviewer | Owner's decision |
 | Preview data | Fixtures only | A Neon preview branch would be a copy of production |
 | Web auth | Shared password (scrypt hash in env), signed cookie plus a server-side session record | Sign-out and "sign out every device" must really revoke |
 | Agent auth | Separate per-agent records with scopes; shared password is never agent auth | Revoking one agent must not affect people or other agents |
@@ -102,11 +105,20 @@ Each needs a decision or an action from the owner before work continues.
    gates 1 and 2.
 6. **Browser check.** No browser test has been run. The interface has only
    been exercised over HTTP.
-7. **Hosting.** The Vercel project has no environment variables and no
-   database. Preview URLs sit behind Vercel sign-in, so only the Vercel
+7. **Hosting.** Production is live and public at
+   https://el-salvador-trip-app.vercel.app. With no environment variables and
+   no database it fails closed: `/api/health` reports sign-in, storage and
+   agent access all off, the home page says the planner is not set up yet,
+   and `/api/trip` and `/api/mcp` answer 503. It stays that way until gates 1
+   and 2 are done. Preview URLs sit behind Vercel sign-in, so only the Vercel
    account owner can open them. Whether commits authored by the collaborator
-   deploy on the Hobby plan is untested. After this branch merges, `main`
-   deploys to production and refuses every request until gates 1 and 2 are done.
+   deploy on the Hobby plan is untested.
+
+## Next action
+
+The owner sets `TRIP_PASSWORD_HASH` and `SESSION_SECRET` for Production in
+Vercel (gate 2). Production keeps refusing data requests until the database
+is connected too (gate 1).
 
 ## Accepted risks
 
