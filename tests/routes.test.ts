@@ -23,16 +23,20 @@ type Method = "GET" | "POST" | "DELETE";
 // Every API route in the app, and who may call it. "session" routes return or
 // change trip data and must refuse anyone without a valid web session.
 // "agent" routes have their own credential check (covered in mcp.test.ts).
+// "public" routes return no trip data: sign-in, the health report, and the
+// OAuth metadata document (which is 404 while agent access is off).
 const ROUTE_TABLE: Record<string, Partial<Record<Method, "public" | "session" | "agent">>> = {
-  "auth/login": { POST: "public" },
-  "auth/logout": { POST: "session" },
-  "auth/logout-everywhere": { POST: "session" },
-  "auth/session": { GET: "session" },
-  health: { GET: "public" },
-  mcp: { POST: "agent", GET: "agent", DELETE: "agent" },
-  trip: { GET: "session" },
-  "trip/activity": { GET: "session" },
-  "trip/ops": { POST: "session" },
+  ".well-known/oauth-protected-resource": { GET: "public" },
+  ".well-known/oauth-protected-resource/[...path]": { GET: "public" },
+  "api/auth/login": { POST: "public" },
+  "api/auth/logout": { POST: "session" },
+  "api/auth/logout-everywhere": { POST: "session" },
+  "api/auth/session": { GET: "session" },
+  "api/health": { GET: "public" },
+  "api/mcp": { POST: "agent", GET: "agent", DELETE: "agent" },
+  "api/trip": { GET: "session" },
+  "api/trip/activity": { GET: "session" },
+  "api/trip/ops": { POST: "session" },
 };
 
 const SESSION_ROUTES: { name: string; method: Method; path: string; handler: Handler; body?: unknown }[] = [
@@ -44,13 +48,14 @@ const SESSION_ROUTES: { name: string; method: Method; path: string; handler: Han
   { name: "sign out everywhere", method: "POST", path: "/api/auth/logout-everywhere", handler: handleLogoutEverywhere, body: {} },
 ];
 
-const routeModules = import.meta.glob("../src/app/api/**/route.ts") as Record<
-  string,
-  () => Promise<Record<string, unknown>>
->;
+// Globs skip dot-folders unless the pattern names them, hence the second pattern.
+const routeModules = {
+  ...import.meta.glob("../src/app/**/route.ts"),
+  ...import.meta.glob("../src/app/.well-known/**/route.ts"),
+} as Record<string, () => Promise<Record<string, unknown>>>;
 
 function routeFilesOnDisk(): string[] {
-  const root = join(process.cwd(), "src", "app", "api");
+  const root = join(process.cwd(), "src", "app");
   const found: string[] = [];
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -78,7 +83,7 @@ describe("route inventory", () => {
   it("lists every route file and every exported method", async () => {
     expect(routeFilesOnDisk()).toEqual(Object.keys(ROUTE_TABLE).sort());
     for (const [path, methods] of Object.entries(ROUTE_TABLE)) {
-      const mod = await routeModules[`../src/app/api/${path}/route.ts`]();
+      const mod = await routeModules[`../src/app/${path}/route.ts`]();
       const exported = Object.keys(mod).filter((name) => /^[A-Z]+$/.test(name)).sort();
       expect(exported, path).toEqual(Object.keys(methods).sort());
       expect(mod.dynamic, path).toBe("force-dynamic");
@@ -87,21 +92,30 @@ describe("route inventory", () => {
 
   it("has a session test case for every session route", () => {
     const tabled = Object.entries(ROUTE_TABLE).flatMap(([path, methods]) =>
-      Object.entries(methods).filter(([, access]) => access === "session").map(([method]) => `${method} /api/${path}`),
+      Object.entries(methods).filter(([, access]) => access === "session").map(([method]) => `${method} /${path}`),
     );
     expect(SESSION_ROUTES.map((r) => `${r.method} ${r.path}`).sort()).toEqual(tabled.sort());
   });
 
+  it("serves no OAuth metadata from the real routes while agent access is off", async () => {
+    for (const path of [".well-known/oauth-protected-resource", ".well-known/oauth-protected-resource/[...path]"]) {
+      const mod = await routeModules[`../src/app/${path}/route.ts`]();
+      const handler = mod.GET as (request: Request) => Promise<Response>;
+      const response = await handler(makeRequest("/.well-known/oauth-protected-resource/api/mcp"));
+      expect(response.status, path).toBe(404);
+    }
+  });
+
   it("refuses the real route exports when there is no session", async () => {
     for (const [path, methods] of Object.entries(ROUTE_TABLE)) {
-      const mod = await routeModules[`../src/app/api/${path}/route.ts`]();
+      const mod = await routeModules[`../src/app/${path}/route.ts`]();
       for (const [method, access] of Object.entries(methods)) {
         if (access === "public") continue;
         const handler = mod[method] as (request: Request) => Promise<Response>;
-        const response = await handler(makeRequest(`/api/${path}`, { method, body: {} }));
+        const response = await handler(makeRequest(`/${path}`, { method, body: {} }));
         // Session routes: 401. Agent route: 503 (agent access is off) or 405.
         const expected = access === "session" ? [401] : [503, 405];
-        expect(expected, `${method} /api/${path}`).toContain(response.status);
+        expect(expected, `${method} /${path}`).toContain(response.status);
         expect(response.headers.get("cache-control"), path).toContain("no-store");
       }
     }

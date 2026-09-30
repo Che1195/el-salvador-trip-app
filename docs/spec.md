@@ -1,6 +1,7 @@
 # Trip planner: specification
 
-Status: initial build, local fixture only. Last updated 2026-09-30.
+Status: initial build. Runs on a local fixture; the Postgres store is built and
+tested without a server. Last updated 2026-09-30.
 
 This file is the single record of what was agreed. Update it whenever scope,
 a decision, or the next action changes.
@@ -30,9 +31,12 @@ two people.
 - Managing several trips. Records, sessions and agent grants all carry a
   `tripId`, and the trip's title, destination and dates are an editable record
   rather than code, but there is one trip and no trip switcher.
-- A real database. The app runs on a labeled in-memory fixture.
-- Remote agent access. It stays off until an authorization provider is approved.
+- A connected database. The Postgres store exists; no database does yet.
+- Remote agent access. It stays off until an OAuth integration is verified.
 - Any real trip content, password, key, token, or database credential.
+- Applying migrations to a hosted database, or reading its connection string.
+- Choosing or connecting an OAuth authorization server, and enrolling OAuth
+  agents. The token-checking side is built and tested against a fake.
 - Per-person accounts. The shared password gives no way to tell the two people
   apart beyond the device name each types at sign-in.
 
@@ -49,6 +53,12 @@ two people.
 | Agent removals | Not available to agents at all | A token the agent can echo is not a person's consent |
 | Conflict handling | Per-item revision; stale edits are refused | Two phones and several agents write concurrently |
 | Deletes | Soft delete to a trash, with restore | Every mistake must be recoverable |
+| Postgres access | `pg` driver, SERIALIZABLE transactions, retried on 40001, 40P01 and 23505 | Read-then-write operations must not interleave |
+| Store tests | PGlite (Postgres in WebAssembly, in the test process) | No server or credential needed. Cannot produce real concurrent collisions |
+| Schema | Numbered migrations with checksums; the app checks the version and never migrates itself | A deploy cannot silently change the schema |
+| Environment separation | A write-once marker inside each database, checked at startup | Holds even if a connection string is pasted into the wrong environment |
+| Agent OAuth | Resource-server checks with `jose`; identity is issuer + client + user; token scopes can only narrow a grant | MCP authorization spec; one revocable record per assistant |
+| First run | A signed-in person on an empty database is asked for the trip's details | Production needs no seed script |
 
 ## Acceptance criteria and where each is checked
 
@@ -64,19 +74,28 @@ two people.
 | Agents cannot remove a record by any path | `tests/operations.test.ts`, `tests/mcp.test.ts` |
 | Concurrent packing writes lose nothing | `tests/operations.test.ts` |
 | Budget totals are exact | `tests/budget.test.ts` |
+| Both stores behave the same | `tests/store-contract.test.ts`, plus the "postgres" test project rerunning the operation, route, MCP and OAuth suites |
+| Migrations apply once, refuse edits, and roll back on failure | `tests/postgres-store.test.ts` |
+| A database of the wrong environment, or schema version, is refused | `tests/postgres-store.test.ts` |
+| Collisions are retried; other errors are not | `tests/postgres-store.test.ts` (scripted database) |
+| Rate limits are shared across instances | `tests/postgres-store.test.ts` |
+| Tokens are checked for signature, issuer, audience, expiry, algorithm | `tests/oauth.test.ts` |
+| Deployed environments keep agent access off | `tests/oauth.test.ts`, `tests/mcp.test.ts` |
 
 ## Open gates
 
 Each needs a decision or an action from the owner before work continues.
 
-1. **Storage connection.** Neon Free is approved; the secure sign-in and
-   connection are being coordinated separately. Nothing is provisioned. Next:
-   write the Postgres store against `db/schema.sql` and test it. See
-   [storage.md](storage.md).
+1. **Storage connection.** Neon Free is approved; project creation and
+   credentials are handled separately. The store and migrations are ready.
+   Next: the database owner runs `db:migrate` on each database and sets
+   `DATABASE_URL` in Vercel. See [storage.md](storage.md).
 2. **Production secrets.** `SESSION_SECRET` and `TRIP_PASSWORD_HASH` are set by
    the owner, never by an agent. See the README.
-3. **Agent authorization provider.** Required before any remote agent can
-   connect. ChatGPT needs OAuth 2.1. See [mcp.md](mcp.md).
+3. **Agent authorization provider.** The token checks and metadata are built
+   and tested against a fake. Still needed: choose a provider, build
+   enrollment, wire configuration, prove a real connection. See
+   [mcp.md](mcp.md).
 4. **Human approval path for agent removals.** Agents cannot remove items
    until a person can approve each removal in the app.
 5. **Real trip content.** Entered in the app, or seeded privately, only after

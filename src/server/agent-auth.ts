@@ -5,10 +5,11 @@
 // next request. The acting identity always comes from the verified
 // credential, never from anything in the request body.
 //
-// Status: only the local fixture authenticator exists. Remote agent access
-// stays switched off (every request gets 503) until an approved authorization
-// provider is wired in behind the AgentAuthenticator interface. For ChatGPT
-// that has to be OAuth 2.1; see docs/mcp.md.
+// Status: deployed environments always use the disabled authenticator, so
+// every remote request gets 503. The local fixture authenticator runs in
+// local development only. An OAuth authenticator exists in ./oauth and is
+// tested against a fake provider, but nothing constructs it outside tests
+// until a real integration has been verified. See docs/mcp.md.
 
 import "server-only";
 import type { Scope } from "@/domain/model";
@@ -26,10 +27,25 @@ export interface AgentPrincipal {
 
 export type AgentAuthResult =
   | { ok: true; principal: AgentPrincipal }
-  | { ok: false; reason: "not_configured" | "invalid" };
+  /**
+   * not_configured: agent access is off (503).
+   * invalid: no credential, or one that does not verify (401).
+   * insufficient: the credential is genuine but grants nothing here (403).
+   */
+  | { ok: false; reason: "not_configured" | "invalid" | "insufficient" };
+
+/** What this server publishes about itself as an OAuth protected resource. */
+export interface ProtectedResourceInfo {
+  /** Canonical URI of the MCP endpoint. Tokens must name it as their audience. */
+  resource: string;
+  authorizationServers: readonly string[];
+  scopesSupported: readonly Scope[];
+}
 
 export interface AgentAuthenticator {
-  readonly mode: "disabled" | "local-fixture";
+  readonly mode: "disabled" | "local-fixture" | "oauth";
+  /** Present only when agents authenticate with OAuth access tokens. */
+  readonly protectedResource?: ProtectedResourceInfo;
   authenticate(request: Request, tripId: string): Promise<AgentAuthResult>;
 }
 

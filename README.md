@@ -13,10 +13,10 @@ They are never committed, and neither is any password, key or token.
 
 | Part | State |
 |---|---|
-| Web app, domain rules, MCP server | Built. Tested locally on an in-memory fixture |
-| Durable storage | Not connected. Neon Postgres is chosen; see [docs/storage.md](docs/storage.md) |
+| Web app, domain rules, MCP server | Built. Tested on the in-memory fixture and on an in-process Postgres |
+| Durable storage | Postgres store and migrations built. No database connected yet; see [docs/storage.md](docs/storage.md) |
 | Production sign-in | Not configured. Production refuses all requests until its secrets are set |
-| Remote agent access | Off. Every deployed environment answers 503 on `/api/mcp` |
+| Remote agent access | Off. Every deployed environment answers 503 on `/api/mcp`. OAuth token checks are built and tested against a fake provider only |
 | ChatGPT, Muse or other hosted agents | Not verified. See [docs/mcp.md](docs/mcp.md) |
 | Hosting | Vercel project linked to this repository, with no secrets and no database. Deployments show a "not set up yet" page and refuse every data request |
 | Browser testing | Not done. The interface has been exercised over HTTP only |
@@ -44,8 +44,10 @@ shared between devices.
 bun run check
 ```
 
-That runs the typecheck, lint and the test suite. `bun run build` builds for
-production.
+That runs the typecheck, lint and the test suite. The suite runs twice where
+it matters: once on the in-memory fixture and once on PGlite, a Postgres that
+runs inside the test process, so no database server or credential is needed.
+`bun run build` builds for production.
 
 ## How it is protected
 
@@ -91,8 +93,9 @@ The owner sets the two secrets, by hand:
 | `src/server/operations.ts` | Every trip operation, used by the web API and by MCP |
 | `src/server/handlers.ts` | Web API request handlers |
 | `src/server/mcp` | MCP protocol adapter and HTTP entry point |
-| `src/server/store` | Storage interface and the in-memory fixture |
+| `src/server/store` | Storage interface, the in-memory fixture, the Postgres store and the migration runner |
+| `src/server/oauth` | Access-token checks and OAuth metadata for agents (off in deployments) |
 | `src/server/sample-data.ts` | The fictitious sample trip |
 | `src/ui` | The interface |
-| `db/schema.sql` | Draft Postgres schema, not applied anywhere |
+| `db/migrations` | Numbered schema migrations, applied by `bun run db:migrate` |
 | `tests` | Test suite |

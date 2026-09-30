@@ -7,6 +7,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import type { Deps } from "../deps";
 import { DomainError } from "../errors";
 import { clientKey, isJsonContentType, isTrustedOrigin, PRIVATE_HEADERS, readBodyText } from "../http";
+import { resourceMetadataUrl } from "../oauth/metadata";
 import { buildMcpServer } from "./server";
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -23,6 +24,24 @@ function rpcError(
     status,
     headers: { ...PRIVATE_HEADERS, "Content-Type": "application/json", ...headers },
   });
+}
+
+/**
+ * The WWW-Authenticate value for a refused request. With OAuth it points the
+ * client at this server's protected resource metadata (RFC 9728), which is
+ * how an MCP client discovers where to get a token.
+ */
+function challenge(request: Request, deps: Deps, reason: "invalid" | "insufficient"): string {
+  const info = deps.agentAuth.protectedResource;
+  if (!info) return 'Bearer realm="trip-planner"';
+  const parts = [`resource_metadata="${resourceMetadataUrl(info.resource)}"`];
+  if (reason === "insufficient") {
+    parts.push('error="insufficient_scope"', `scope="${info.scopesSupported.join(" ")}"`);
+  } else if (request.headers.has("authorization")) {
+    // Only name an error when a credential was actually presented (RFC 6750).
+    parts.push('error="invalid_token"');
+  }
+  return `Bearer ${parts.join(", ")}`;
 }
 
 export async function handleMcpRequest(request: Request, deps: Deps): Promise<Response> {
@@ -49,9 +68,12 @@ export async function handleMcpRequest(request: Request, deps: Deps): Promise<Re
     if (!hit.allowed) {
       return rpcError(429, -32002, "Too many requests.", { "Retry-After": String(hit.retryAfterSeconds) });
     }
-    return rpcError(401, -32001, "A valid agent credential is required.", {
-      "WWW-Authenticate": 'Bearer realm="trip-planner"',
-    });
+    return rpcError(
+      auth.reason === "insufficient" ? 403 : 401,
+      -32001,
+      auth.reason === "insufficient" ? "This credential has no access here." : "A valid agent credential is required.",
+      { "WWW-Authenticate": challenge(request, deps, auth.reason) },
+    );
   }
   if (!store) return rpcError(503, -32001, "Storage is not set up for this environment.");
 

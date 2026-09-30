@@ -3,9 +3,10 @@
 MCP (Model Context Protocol) is the standard an AI agent uses to call an
 app's tools. This app has an MCP server at `/api/mcp`.
 
-Status: **tested locally against a fixture. Remote agent access is off.** No
-connection from ChatGPT, Muse, or any other hosted agent has been attempted,
-so none is claimed to work.
+Status: **tested locally against a fixture and a fake OAuth provider. Remote
+agent access is off in every deployed environment.** No connection from
+ChatGPT, Muse, or any other hosted agent has been attempted, so none is
+claimed to work.
 
 ## What is tested and what is not
 
@@ -13,10 +14,13 @@ so none is claimed to work.
 |---|---|
 | Protocol handshake, tool listing, tool calls over Streamable HTTP | Tested: the official SDK client talks to the real request handler in `tests/mcp.test.ts` |
 | Scopes, revocation, idempotency, conflicts, audit, no agent removals | Tested locally |
-| A deployed environment accepting an agent | Not possible yet: every request gets 503 |
-| ChatGPT connecting | Not verified. Needs OAuth 2.1, which is not built |
+| Access-token validation: signature, issuer, audience, expiry, algorithm, token type | Tested against a fake provider in `tests/oauth.test.ts` |
+| Protected resource metadata and the 401/403 `WWW-Authenticate` challenges | Tested against the fake provider |
+| A deployed environment accepting an agent | Off: every request gets 503, and the metadata route answers 404 |
+| A real authorization server | Not chosen, not connected |
+| Enrolling an OAuth agent (creating its record from the app) | Not built |
+| ChatGPT connecting | Not verified |
 | Muse connecting | Not verified. Muse is known to use MCP apps; this server's transport and auth have not been tried with it |
-| OAuth flows, token audience checks, protected resource metadata | Not built |
 
 ## Design
 
@@ -119,10 +123,50 @@ unless marked read-only.
   of this app. A shared secret will not work for it.
 - Other clients differ. Some accept a static bearer token; do not assume any
   of them support OAuth, or that they do not.
-- The extension point is the `AgentAuthenticator` interface in
-  `src/server/agent-auth.ts`. An OAuth implementation would validate the
-  access token (signature, issuer, audience, expiry), map it to an agent
-  record, and the rest of the app would not change.
+
+## OAuth, as built
+
+This app would be the OAuth *resource server*: it checks tokens, it never
+issues them. Issuing tokens (sign-in, consent, client registration, PKCE) is
+the job of a separate authorization server, which has not been chosen.
+
+**Token checks** (`src/server/oauth/token-verifier.ts`, using the `jose`
+library). A token is accepted only if all of these hold:
+
+- signed with a key the configured issuer publishes, using an asymmetric
+  algorithm (RS256, PS256, ES256, ES384 or EdDSA; never HS256 or "none");
+- `iss` is exactly the configured issuer;
+- `aud` includes this server's canonical resource URI, so a token issued for
+  any other service is refused (no token reuse or passthrough);
+- not expired and not yet-to-start (5 seconds of clock tolerance);
+- has a subject; its type header is absent, `JWT`, or `at+jwt`.
+
+**Who the agent is** (`src/server/oauth/authenticator.ts`). The identity is
+the issuer plus the client application plus the user, so one person using two
+assistants is two separately revocable agents. A valid token for an identity
+nobody enrolled gets 403. An enrolled agent gets only the scopes present in
+both its record and the token: a token can narrow access, never widen it.
+Revocation in the app takes effect on the next request even while the token
+is still valid.
+
+**Discovery.** When OAuth is in use, a refused request carries
+`WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/api/mcp"`,
+plus `error="invalid_token"` or `error="insufficient_scope"` with the scopes.
+That URL serves the RFC 9728 metadata document naming the resource, its
+authorization server and its scopes.
+
+**Off until verified.** Nothing outside the tests constructs the OAuth
+authenticator. Deployed environments use the disabled authenticator no matter
+which environment variables are set, and a test checks that. Turning it on
+requires, in order:
+
+1. Choosing an authorization server that supports what ChatGPT needs (PKCE
+   S256; CIMD or dynamic client registration; the `resource` parameter
+   written into the token's audience).
+2. Building enrollment: a person approves an OAuth identity in the app, which
+   creates the agent record with its scopes.
+3. Wiring the issuer, its key set URL and the resource URI into configuration.
+4. Proving a real connection on a preview deployment, then owner approval.
 
 ## Trying it locally
 
