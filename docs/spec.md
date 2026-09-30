@@ -42,6 +42,7 @@ two people.
 |---|---|---|
 | Stack | Next.js 16, Tailwind 4, TypeScript, bun, Vercel | Requested |
 | Storage | New Neon Postgres, Free plan; two separate projects (production, preview) | $0, no card, fits the data size. Approved by the owner; not yet connected |
+| Hosting | Vercel, Hobby plan. Project created and linked through the existing GitHub integration; no environment variables set | Requested |
 | Preview data | Fixtures only | A Neon preview branch would be a copy of production |
 | Web auth | Shared password (scrypt hash in env), signed cookie plus a server-side session record | Sign-out and "sign out every device" must really revoke |
 | Agent auth | Separate per-agent records with scopes; shared password is never agent auth | Revoking one agent must not affect people or other agents |

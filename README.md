@@ -18,6 +18,7 @@ They are never committed, and neither is any password, key or token.
 | Production sign-in | Not configured. Production refuses all requests until its secrets are set |
 | Remote agent access | Off. Every deployed environment answers 503 on `/api/mcp` |
 | ChatGPT, Muse or other hosted agents | Not verified. See [docs/mcp.md](docs/mcp.md) |
+| Hosting | Vercel project linked to this repository, with no secrets and no database. Deployments show a "not set up yet" page and refuse every data request |
 | Browser testing | Not done. The interface has been exercised over HTTP only |
 
 What was agreed, and what is still open, is in [docs/spec.md](docs/spec.md).
