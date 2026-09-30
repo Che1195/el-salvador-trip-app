@@ -1,0 +1,92 @@
+@import "tailwindcss";
+
+/*
+  Tokens. The palette comes from the coast this planner was first made for:
+  anil (the indigo dye), black volcanic sand, limewashed walls, maize.
+*/
+@theme {
+  --color-paper: #eef2f4;
+  --color-surface: #ffffff;
+  --color-ink: #1a2030;
+  --color-ash: #5a6373;
+  --color-line: #d3dae2;
+  --color-anil: #26358c;
+  --color-anil-deep: #1a2566;
+  --color-anil-wash: #e6e9f6;
+  --color-maiz: #f2b705;
+  --color-danger: #b42318;
+  --font-sans: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+}
+
+html {
+  color-scheme: light;
+  height: 100%;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* Scrolling happens inside the shell, and pinch zoom stays off the chrome. */
+  overflow: hidden;
+  touch-action: pan-x pan-y;
+}
+
+/* One family, two voices: headings use Archivo's wide cut. */
+.type-wide {
+  font-stretch: 125%;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+
+.nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* iOS zooms the page when a focused control's text is under 16px. */
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-maiz);
+  outline-offset: 2px;
+}
+
+dialog.sheet {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+dialog.sheet::backdrop {
+  background: rgb(26 32 48 / 0.55);
+}
+
+@media (min-width: 640px) {
+  dialog.sheet {
+    margin: auto;
+    width: 32rem;
+    height: auto;
+    max-height: 90dvh;
+    border-radius: 0.75rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
