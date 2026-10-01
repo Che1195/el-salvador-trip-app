@@ -150,16 +150,23 @@ describe("environment marker", () => {
 });
 
 describe("opening the store", () => {
-  it("refuses a database with no schema, the wrong schema version, or no marker", async () => {
+  it("refuses a database with no schema or no marker", async () => {
     expect(await unavailableReason(PostgresStore.open(emptyDatabase()))).toBe("schema_missing");
 
     const unmarked = emptyDatabase();
     await applyMigrations(unmarked, loadMigrations(MIGRATIONS_DIR));
     expect(await unavailableReason(PostgresStore.open(unmarked))).toBe("scope_marker_missing");
 
+  });
+
+  it("accepts a database migrated ahead of this code, so migrations can be applied before deploying", async () => {
     const ahead = await migratedDatabase("preview");
     await ahead.query("INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, 'future', 'x')", [EXPECTED_SCHEMA_VERSION + 1]);
-    expect(await unavailableReason(PostgresStore.open(ahead))).toBe("schema_version_mismatch");
+    const store = await PostgresStore.open(ahead);
+    expect(store.scope).toBe("preview");
+    // It still works normally on the tables it knows.
+    await store.transaction((tx) => tx.setSessionEpoch("trip_1", 2));
+    expect(await store.transaction((tx) => tx.getSessionEpoch("trip_1"))).toBe(2);
   });
 
   it("takes its scope from the database, not from configuration", async () => {

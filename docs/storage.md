@@ -63,9 +63,12 @@ app reads it, and `storeMatchesDeployment` in `src/server/deps.ts` refuses a
 database whose marker differs from the deployment. A preview given
 production's connection string by mistake would refuse to serve.
 
-**Schema version.** The app checks that the database is at exactly the
-migration version the code expects (`EXPECTED_SCHEMA_VERSION`) and refuses
-otherwise. The app never changes the schema itself.
+**Schema version.** The app refuses a database older than the migration
+version the code expects (`EXPECTED_SCHEMA_VERSION`) and accepts the same
+version or a newer one. Migrations only ever add, so the order for a schema
+change is: apply the migration to each database (the running code keeps
+working), then deploy the code that needs it. The app never changes the
+schema itself.
 
 **TLS.** In deployments, `DATABASE_URL` must say `sslmode=require` (or
 stricter), and the app then also verifies the server's certificate
@@ -74,7 +77,7 @@ explicitly, rather than relying on how the driver version reads `sslmode`.
 **Secrets.** The connection string is read from the deployment's environment
 at runtime. It is never logged, returned, or included in an error. Startup
 failures log a fixed reason only (`connection_failed`, `schema_missing`,
-`schema_version_mismatch`, `scope_marker_missing`). The migrate command prints its own refusals
+`schema_behind`, `scope_marker_missing`). The migrate command prints its own refusals
 (which hold only migration numbers, file names and environment names) or a
 fixed sentence with an error code such as `28P01`. It never prints a
 driver's message, stack or detail, since any of them can quote the connection

@@ -28,7 +28,7 @@ import {
 
 export type StoreUnavailableReason =
   | "schema_missing"
-  | "schema_version_mismatch"
+  | "schema_behind"
   | "scope_marker_missing";
 
 /** The database is reachable but must not be used. The reason is safe to log. */
@@ -417,14 +417,19 @@ export class PostgresStore implements Store {
 
   /**
    * Checks that the database is usable before anything reads or writes it:
-   * the schema must be exactly the version this code expects, and the
+   * the schema must be at least the version this code expects, and the
    * database must carry an environment marker. The marker becomes the
    * store's `scope`, which the caller compares with the deployment.
+   *
+   * A newer schema is accepted because migrations here only ever add tables,
+   * columns and indexes (see AGENTS.md). That lets a migration be applied
+   * while the previous code is still serving, before the code that needs it
+   * is deployed.
    */
   static async open(db: SqlDatabase, retry: Partial<RetryOptions> = {}): Promise<PostgresStore> {
     const version = await currentSchemaVersion(db);
     if (version === 0) throw new StoreUnavailableError("schema_missing");
-    if (version !== EXPECTED_SCHEMA_VERSION) throw new StoreUnavailableError("schema_version_mismatch");
+    if (version < EXPECTED_SCHEMA_VERSION) throw new StoreUnavailableError("schema_behind");
     const scope = await readDataScope(db);
     if (scope === null) throw new StoreUnavailableError("scope_marker_missing");
     return new PostgresStore(db, scope, { ...DEFAULT_RETRY, ...retry });
