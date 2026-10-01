@@ -179,6 +179,31 @@ describe("transport rules", () => {
     expect((await handleMcpRequest(rawInitialize(auth), h.deps)).status).toBe(200);
   });
 
+  it("keeps the status of protocol errors the library builds, but not the exception text inside them", async () => {
+    const h = await makeHarness();
+    const agent = await addFixtureAgent(h, ALL_SCOPES);
+    // The library catches unexpected exceptions while handling a request and
+    // copies their text into its 400 answer. Make reading the request's
+    // headers throw, which happens inside that guarded code.
+    const request = rawInitialize({ Authorization: `Bearer ${agent.token}` });
+    const trapped = new Headers(request.headers);
+    Object.defineProperty(trapped, "entries", {
+      value: () => {
+        throw new Error("SENTINEL_SECRET_TEXT");
+      },
+    });
+    Object.defineProperty(request, "headers", { value: trapped });
+
+    const response = await handleMcpRequest(request, h.deps);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const text = await response.text();
+    expect(text).not.toContain("SENTINEL_SECRET_TEXT");
+    const body = JSON.parse(text);
+    expect(body.error).not.toHaveProperty("data");
+    expect(typeof body.error.code).toBe("number");
+  });
+
   it("offers no server stream and no session deletion", async () => {
     const h = await makeHarness();
     const agent = await addFixtureAgent(h, ALL_SCOPES);

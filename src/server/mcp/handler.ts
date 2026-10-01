@@ -14,6 +14,32 @@ const MAX_BODY_BYTES = 64 * 1024;
 const AGENT_LIMIT_PER_MINUTE = 120;
 const UNAUTHENTICATED_LIMIT_PER_MINUTE = 30;
 
+/**
+ * The protocol library answers some malformed requests itself, and for one of
+ * them it copies the caught exception's text into `error.data`. Keep the
+ * status, code and the library's fixed message; drop anything else.
+ */
+async function withoutErrorDetail(response: Response): Promise<string> {
+  try {
+    const parsed: unknown = JSON.parse(await response.text());
+    const error = typeof parsed === "object" && parsed !== null ? (parsed as { error?: unknown }).error : undefined;
+    if (typeof error === "object" && error !== null) {
+      const { code, message } = error as { code?: unknown; message?: unknown };
+      return JSON.stringify({
+        jsonrpc: "2.0",
+        error: {
+          code: typeof code === "number" ? code : -32600,
+          message: typeof message === "string" && message.length <= 200 ? message : "Request failed.",
+        },
+        id: null,
+      });
+    }
+  } catch {
+    // Not JSON: fall through to the fixed body.
+  }
+  return JSON.stringify({ jsonrpc: "2.0", error: { code: -32600, message: "Request failed." }, id: null });
+}
+
 function rpcError(
   status: number,
   code: number,
@@ -105,6 +131,11 @@ async function handle(request: Request, deps: Deps): Promise<Response> {
     const response = await transport.handleRequest(request, { parsedBody });
     const headers = new Headers(response.headers);
     for (const [name, value] of Object.entries(PRIVATE_HEADERS)) headers.set(name, value);
+    if (response.status >= 400) {
+      headers.set("Content-Type", "application/json");
+      headers.delete("Content-Length");
+      return new Response(await withoutErrorDetail(response), { status: response.status, headers });
+    }
     return new Response(response.body, { status: response.status, headers });
   } catch {
     return rpcError(500, -32603, "Internal error.");

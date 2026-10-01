@@ -196,9 +196,9 @@ That URL serves the RFC 9728 metadata document naming the resource, its
 authorization server and its scopes.
 
 **Off until verified.** Nothing outside the tests constructs the OAuth
-authenticator. Deployed environments use the disabled authenticator no matter
-which environment variables are set, and a test checks that. Turning it on
-requires, in order:
+authenticator. Deployed environments use per-agent keys (or nothing, with
+`AGENT_ACCESS=off`) no matter which OAuth-looking environment variables are
+set, and tests check that. Turning OAuth on requires, in order:
 
 1. Choosing an authorization server that supports what ChatGPT needs (PKCE
    S256; CIMD or dynamic client registration; the `resource` parameter

@@ -104,7 +104,9 @@ export function AgentKeyDialog({ onClose, onCreated }: { onClose(): void; onCrea
       aria-labelledby={`${formId}-heading`}
       onCancel={(event) => {
         event.preventDefault();
-        onClose();
+        // Closing mid-request would hide the key, or the warning, if the agent
+        // is created after all. Wait for the answer first.
+        if (!busy) onClose();
       }}
       data-testid="agent-dialog"
     >
@@ -113,7 +115,13 @@ export function AgentKeyDialog({ onClose, onCreated }: { onClose(): void; onCrea
           <h2 id={`${formId}-heading`} className="type-wide text-lg">
             {created ? `Key for ${created.agent.name}` : "Create agent"}
           </h2>
-          <button type="button" onClick={onClose} className="rounded-md px-3 py-2 text-sm underline" data-testid="agent-dialog-close">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="rounded-md px-3 py-2 text-sm underline disabled:opacity-60"
+            data-testid="agent-dialog-close"
+          >
             {created ? "Done" : "Cancel"}
           </button>
         </header>

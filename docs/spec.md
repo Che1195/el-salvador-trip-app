@@ -2,7 +2,8 @@
 
 Status: initial build merged to `main` (PR #1, 2026-09-30). Production is
 live at https://el-salvador-trip-app.vercel.app on its own Neon Postgres
-database, with sign-in configured (2026-10-01). Remote agent access stays off.
+database, with sign-in configured (2026-10-01). Agents connect with per-agent
+keys created in the app; OAuth, needed for ChatGPT, stays off.
 Last updated 2026-10-01.
 
 This file is the single record of what was agreed. Update it whenever scope,
@@ -33,7 +34,8 @@ two people.
 - Managing several trips. Records, sessions and agent grants all carry a
   `tripId`, and the trip's title, destination and dates are an editable record
   rather than code, but there is one trip and no trip switcher.
-- Remote agent access. It stays off until an OAuth integration is verified.
+- Agent access over OAuth (needed for ChatGPT). It stays off until an
+  integration is verified. Per-agent keys are in scope.
 - Any real trip content, password, key, token, or database credential.
 - Applying migrations to a hosted database, or reading its connection string.
 - Choosing or connecting an OAuth authorization server, and enrolling OAuth
