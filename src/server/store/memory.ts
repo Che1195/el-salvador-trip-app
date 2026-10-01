@@ -162,6 +162,7 @@ class MemoryTx implements StoreTx {
 export class MemoryFixtureStore implements Store {
   readonly kind = "memory-fixture" as const;
   readonly durable = false;
+  readonly schemaVersion = null;
 
   private state: State = {
     entities: new Map(),

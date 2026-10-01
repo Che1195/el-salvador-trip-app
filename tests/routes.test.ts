@@ -481,6 +481,17 @@ describe("private data stays out of errors, logs and caches", () => {
       storage: h.store.kind,
       durableStorage: h.store.durable,
       agentAccess: "keys",
+      schemaVersion: h.store.schemaVersion,
+      commit: null,
     });
+  });
+
+  it("names the deployed commit and the database's schema version, so a deploy can be checked from outside", async () => {
+    const h = await makeHarness({ VERCEL_GIT_COMMIT_SHA: "0123456789abcdef0123456789abcdef01234567" });
+    const body = await (await handleHealth(makeRequest("/api/health"), h.deps)).json();
+    expect(body.commit).toBe("0123456");
+    expect(body.schemaVersion).toBe(h.store.kind === "postgres" ? 2 : null);
+    const odd = await makeHarness({ VERCEL_GIT_COMMIT_SHA: "not a sha; <script>" });
+    expect((await (await handleHealth(makeRequest("/api/health"), odd.deps)).json()).commit).toBeNull();
   });
 });

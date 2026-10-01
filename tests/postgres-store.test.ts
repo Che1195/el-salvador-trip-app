@@ -12,7 +12,8 @@ import { handleGetTrip, handleHealth } from "@/server/handlers";
 import {
   applyMigrations,
   currentSchemaVersion,
-  EXPECTED_SCHEMA_VERSION,
+  ACCEPTED_SCHEMA_VERSIONS,
+  LATEST_SCHEMA_VERSION,
   initializeDataScope,
   loadMigrations,
   parseMigration,
@@ -45,7 +46,8 @@ describe("migrations", () => {
 
   it("has files numbered without gaps, matching the version the app expects", () => {
     expect(migrations.map((m) => m.version)).toEqual(migrations.map((_, i) => i + 1));
-    expect(migrations[migrations.length - 1].version).toBe(EXPECTED_SCHEMA_VERSION);
+    expect(migrations[migrations.length - 1].version).toBe(LATEST_SCHEMA_VERSION);
+    expect(ACCEPTED_SCHEMA_VERSIONS).toContain(LATEST_SCHEMA_VERSION);
     expect(readdirSync(MIGRATIONS_DIR).every((name) => /^\d{4}_[a-z0-9_]+\.sql$/.test(name))).toBe(true);
   });
 
@@ -61,7 +63,7 @@ describe("migrations", () => {
     const db = emptyDatabase();
     expect(await currentSchemaVersion(db)).toBe(0);
     expect(await applyMigrations(db, migrations)).toEqual(migrations.map((m) => m.version));
-    expect(await currentSchemaVersion(db)).toBe(EXPECTED_SCHEMA_VERSION);
+    expect(await currentSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
     expect(await applyMigrations(db, migrations)).toEqual([]);
     expect(await pendingMigrations(db, migrations)).toEqual([]);
     const tables = await db.query<{ table_name: string }>(
@@ -76,6 +78,7 @@ describe("migrations", () => {
       "idempotency_keys",
       "meta",
       "rate_limits",
+      "removal_requests",
       "schema_migrations",
       "session_epochs",
       "sessions",
@@ -102,7 +105,7 @@ describe("migrations", () => {
       "create table half_done (id integer primary key); select * from a_table_that_does_not_exist;",
     );
     await expect(applyMigrations(db, [...migrations, broken])).rejects.toThrow();
-    expect(await currentSchemaVersion(db)).toBe(EXPECTED_SCHEMA_VERSION);
+    expect(await currentSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
     const leftover = await db.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'half_done'");
     expect(leftover.rows).toEqual([]);
   });
@@ -159,14 +162,24 @@ describe("opening the store", () => {
 
   });
 
-  it("accepts a database migrated ahead of this code, so migrations can be applied before deploying", async () => {
+  it("opens a database at either accepted version, and reports which one it found", async () => {
+    const latest = await PostgresStore.open(await migratedDatabase("preview"));
+    expect(latest.schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+
+    // A database migrated only to version 1, as production is before step two.
+    const v1 = emptyDatabase();
+    await applyMigrations(v1, loadMigrations(MIGRATIONS_DIR).filter((m) => m.version === 1));
+    await initializeDataScope(v1, "preview");
+    const older = await PostgresStore.open(v1);
+    expect(older.schemaVersion).toBe(1);
+    await older.transaction((tx) => tx.setSessionEpoch("trip_1", 2));
+    expect(await older.transaction((tx) => tx.getSessionEpoch("trip_1"))).toBe(2);
+  });
+
+  it("refuses a schema version nobody has reviewed for this code", async () => {
     const ahead = await migratedDatabase("preview");
-    await ahead.query("INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, 'future', 'x')", [EXPECTED_SCHEMA_VERSION + 1]);
-    const store = await PostgresStore.open(ahead);
-    expect(store.scope).toBe("preview");
-    // It still works normally on the tables it knows.
-    await store.transaction((tx) => tx.setSessionEpoch("trip_1", 2));
-    expect(await store.transaction((tx) => tx.getSessionEpoch("trip_1"))).toBe(2);
+    await ahead.query("INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, 'future', 'x')", [Math.max(...ACCEPTED_SCHEMA_VERSIONS) + 1]);
+    expect(await unavailableReason(PostgresStore.open(ahead))).toBe("schema_unknown");
   });
 
   it("takes its scope from the database, not from configuration", async () => {
@@ -270,7 +283,7 @@ function scriptedDatabase(failures: (string | null)[]) {
   const attempts: number[] = [];
   const sql: SqlExecutor = {
     async query<Row>(text: string) {
-      if (text.includes("schema_migrations")) return { rows: [{ version: EXPECTED_SCHEMA_VERSION, checksum: "x" }] as Row[], rowCount: 1 };
+      if (text.includes("schema_migrations")) return { rows: [{ version: LATEST_SCHEMA_VERSION, checksum: "x" }] as Row[], rowCount: 1 };
       if (text.includes("data_scope")) return { rows: [{ value: "local" }] as Row[], rowCount: 1 };
       return { rows: [], rowCount: 0 };
     },
@@ -418,7 +431,7 @@ describe("the migrate command", () => {
   it("migrates, marks the environment, and leaves a database the app accepts", async () => {
     const db = emptyDatabase();
     const result = await runMigrate(options(db).opts);
-    expect(result).toEqual({ applied: [EXPECTED_SCHEMA_VERSION], version: EXPECTED_SCHEMA_VERSION, seeded: false });
+    expect(result).toEqual({ applied: loadMigrations(MIGRATIONS_DIR).map((m) => m.version), version: LATEST_SCHEMA_VERSION, seeded: false });
     const store = await PostgresStore.open(db);
     expect(store.scope).toBe("preview");
     // Running it again is harmless.

@@ -253,5 +253,9 @@ export async function handleHealth(_request: Request, deps: Deps): Promise<Respo
     storage: store ? store.kind : "not_configured",
     durableStorage: store?.durable ?? false,
     agentAccess: deps.agentAuth.mode,
+    // Lets an operator confirm which code is live and which schema it found
+    // before a migration or a dependent deploy. Neither is secret.
+    schemaVersion: store?.schemaVersion ?? null,
+    commit: config.commit,
   });
 }

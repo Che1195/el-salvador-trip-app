@@ -7,7 +7,7 @@
 
 import "server-only";
 import type { EntityKind, Scope } from "@/domain/model";
-import { currentSchemaVersion, EXPECTED_SCHEMA_VERSION, readDataScope } from "./migrations";
+import { ACCEPTED_SCHEMA_VERSIONS, currentSchemaVersion, readDataScope } from "./migrations";
 import { sqlState, type SqlDatabase, type SqlExecutor } from "./sql";
 import {
   StaleWriteError,
@@ -29,6 +29,7 @@ import {
 export type StoreUnavailableReason =
   | "schema_missing"
   | "schema_behind"
+  | "schema_unknown"
   | "scope_marker_missing";
 
 /** The database is reachable but must not be used. The reason is safe to log. */
@@ -412,27 +413,31 @@ export class PostgresStore implements Store {
   private constructor(
     private readonly db: SqlDatabase,
     readonly scope: DataScope,
+    readonly schemaVersion: number,
     private readonly retry: RetryOptions,
   ) {}
 
   /**
    * Checks that the database is usable before anything reads or writes it:
-   * the schema must be at least the version this code expects, and the
-   * database must carry an environment marker. The marker becomes the
-   * store's `scope`, which the caller compares with the deployment.
+   * its schema version must be one this code accepts, and it must carry an
+   * environment marker. The marker becomes the store's `scope`, which the
+   * caller compares with the deployment.
    *
-   * A newer schema is accepted because migrations here only ever add tables,
-   * columns and indexes (see AGENTS.md). That lets a migration be applied
-   * while the previous code is still serving, before the code that needs it
-   * is deployed.
+   * The accepted list can include a version newer than the code needs, once
+   * that version has been reviewed as compatible. That lets a migration be
+   * applied while the previous code is still serving, before the code that
+   * needs it is deployed (see AGENTS.md and docs/storage.md).
    */
   static async open(db: SqlDatabase, retry: Partial<RetryOptions> = {}): Promise<PostgresStore> {
     const version = await currentSchemaVersion(db);
     if (version === 0) throw new StoreUnavailableError("schema_missing");
-    if (version < EXPECTED_SCHEMA_VERSION) throw new StoreUnavailableError("schema_behind");
+    if (!ACCEPTED_SCHEMA_VERSIONS.includes(version)) {
+      const behind = version < Math.min(...ACCEPTED_SCHEMA_VERSIONS);
+      throw new StoreUnavailableError(behind ? "schema_behind" : "schema_unknown");
+    }
     const scope = await readDataScope(db);
     if (scope === null) throw new StoreUnavailableError("scope_marker_missing");
-    return new PostgresStore(db, scope, { ...DEFAULT_RETRY, ...retry });
+    return new PostgresStore(db, scope, version, { ...DEFAULT_RETRY, ...retry });
   }
 
   /**

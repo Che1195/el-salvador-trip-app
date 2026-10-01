@@ -157,6 +157,8 @@ export interface Store {
   readonly kind: StorageKind;
   /** False for the in-memory fixture: its data is lost on restart and not shared. */
   readonly durable: boolean;
+  /** The database's schema version, or null for a store without one (the fixture). */
+  readonly schemaVersion: number | null;
   readonly scope: DataScope;
 
   /**
