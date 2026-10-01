@@ -5,15 +5,16 @@
 // next request. The acting identity always comes from the verified
 // credential, never from anything in the request body.
 //
-// Status: deployed environments always use the disabled authenticator, so
-// every remote request gets 503. The local fixture authenticator runs in
-// local development only. An OAuth authenticator exists in ./oauth and is
-// tested against a fake provider, but nothing constructs it outside tests
-// until a real integration has been verified. See docs/mcp.md.
+// Status: every environment with a store uses the key authenticator, where
+// each agent holds its own random key and the server keeps only the key's
+// SHA-256. With no key created, no request is accepted. Without a store, or
+// with AGENT_ACCESS=off, the disabled authenticator answers 503. An OAuth
+// authenticator exists in ./oauth and is tested against a fake provider, but
+// nothing constructs it outside tests until a real integration has been
+// verified. See docs/mcp.md.
 
 import "server-only";
 import type { Scope } from "@/domain/model";
-import type { AppConfig } from "./config";
 import { sha256Hex } from "./hash";
 import type { Store } from "./store/types";
 
@@ -43,7 +44,7 @@ export interface ProtectedResourceInfo {
 }
 
 export interface AgentAuthenticator {
-  readonly mode: "disabled" | "local-fixture" | "oauth";
+  readonly mode: "disabled" | "keys" | "oauth";
   /** Present only when agents authenticate with OAuth access tokens. */
   readonly protectedResource?: ProtectedResourceInfo;
   authenticate(request: Request, tripId: string): Promise<AgentAuthResult>;
@@ -64,25 +65,24 @@ function bearerToken(request: Request): string | null {
 }
 
 /**
- * Looks an opaque bearer credential up by its hash. Used for the local
- * development fixture and in tests; it refuses to be built anywhere else.
+ * Looks an agent's key up by its hash. The header must be exactly
+ * `Bearer <key>`: a key in the URL or a cookie is never read, and neither is
+ * the website password. It works in every environment because a key is a
+ * random 256-bit value and only its hash is stored.
+ *
+ * An unknown or revoked key is "invalid" (401). A genuine key that holds no
+ * scope for this trip is "insufficient" (403).
  */
-export function createFixtureAgentAuthenticator(
-  store: Store,
-  deployment: AppConfig["deployment"],
-): AgentAuthenticator {
-  if (deployment !== "local") {
-    throw new Error("The fixture agent authenticator only runs in local development.");
-  }
+export function createKeyAgentAuthenticator(store: Store): AgentAuthenticator {
   return {
-    mode: "local-fixture",
+    mode: "keys",
     async authenticate(request, tripId) {
       const token = bearerToken(request);
       if (!token) return { ok: false, reason: "invalid" };
       const agent = await store.transaction((tx) => tx.getAgentByCredentialHash(sha256Hex(token)));
       if (!agent || agent.revokedAt !== null) return { ok: false, reason: "invalid" };
       const grant = agent.grants.find((candidate) => candidate.tripId === tripId);
-      if (!grant || grant.scopes.length === 0) return { ok: false, reason: "invalid" };
+      if (!grant || grant.scopes.length === 0) return { ok: false, reason: "insufficient" };
       return {
         ok: true,
         principal: { type: "agent", id: agent.id, label: agent.name, tripId, scopes: grant.scopes },

@@ -38,7 +38,14 @@ export type StorageConfig =
 
 export type AgentAuthConfig =
   | { mode: "disabled"; reason: string }
-  | { mode: "local-fixture"; credentialHash: string };
+  | {
+      mode: "keys";
+      /**
+       * Local development only: SHA-256 of MCP_DEV_FIXTURE_TOKEN, which seeds
+       * one agent record. Always null in a deployed environment.
+       */
+      localFixtureCredentialHash: string | null;
+    };
 
 export interface AppConfig {
   deployment: Deployment;
@@ -162,15 +169,16 @@ function resolveStorage(env: Env, deployment: Deployment): StorageConfig {
 }
 
 function resolveAgentAuth(env: Env, deployment: Deployment): AgentAuthConfig {
-  if (deployment !== "local") {
-    return { mode: "disabled", reason: "No agent authorization provider is configured." };
+  // The kill switch for every agent at once. Environment variables only reach
+  // new deployments, so it takes effect on the next deploy.
+  if (env.AGENT_ACCESS?.trim().toLowerCase() === "off") {
+    return { mode: "disabled", reason: "AGENT_ACCESS is off." };
   }
-  const token = env.MCP_DEV_FIXTURE_TOKEN;
-  if (!token) return { mode: "disabled", reason: "MCP_DEV_FIXTURE_TOKEN is not set." };
-  if (token.length < 32) {
-    return { mode: "disabled", reason: "MCP_DEV_FIXTURE_TOKEN must be at least 32 characters." };
-  }
-  return { mode: "local-fixture", credentialHash: sha256Hex(token) };
+  // The developer token is a local convenience. Anywhere else it is ignored,
+  // so a deployed environment never seeds an agent from an environment variable.
+  const token = deployment === "local" ? env.MCP_DEV_FIXTURE_TOKEN : undefined;
+  const localFixtureCredentialHash = token && token.length >= 32 ? sha256Hex(token) : null;
+  return { mode: "keys", localFixtureCredentialHash };
 }
 
 export async function loadConfig(env: Env): Promise<AppConfig> {

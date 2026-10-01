@@ -1,15 +1,16 @@
 import { randomBytes } from "node:crypto";
 import type { Scope } from "@/domain/model";
-import { createFixtureAgentAuthenticator, type AgentPrincipal } from "@/server/agent-auth";
+import type { AgentPrincipal } from "@/server/agent-auth";
 import { LOCAL_FIXTURE_PASSWORD, type Env } from "@/server/config";
 import { buildDeps, type Deps } from "@/server/deps";
 import { sha256Hex } from "@/server/hash";
 import { handleLogin } from "@/server/handlers";
 import type { OpContext, Principal } from "@/server/operations";
 import { seedSampleTrip } from "@/server/sample-data";
+import { MemoryFixtureStore } from "@/server/store/memory";
 import { PostgresStore } from "@/server/store/postgres";
 import type { Store } from "@/server/store/types";
-import { cleanSharedDatabase } from "./pglite";
+import { cleanSharedDatabase, migratedDatabase } from "./pglite";
 
 export const ORIGIN = "http://localhost:3000";
 export const START = new Date("2031-03-01T12:00:00.000Z");
@@ -43,6 +44,38 @@ export async function makeHarness(env: Env = {}): Promise<Harness> {
   const deps = ON_POSTGRES
     ? await buildDeps({ NODE_ENV: "test", ...env }, clock, (config, now) => samplePostgresStore(config.tripId, now()))
     : await buildDeps({ NODE_ENV: "test", ...env }, clock);
+  if (!deps.store) throw new Error("expected a store");
+  const store = deps.store;
+  return {
+    deps: { ...deps, store },
+    store,
+    tripId: deps.config.tripId,
+    advance(ms) {
+      current += ms;
+    },
+    now: () => new Date(current),
+  };
+}
+
+/**
+ * A deployed production configuration (no sample data, no local shortcuts)
+ * over an empty store that reports scope "production": an in-process Postgres
+ * in the "postgres" test project, otherwise the memory fixture relabeled.
+ * The sample trip is not seeded, because production refuses sample data.
+ */
+export async function makeProductionHarness(env: Env = {}): Promise<Harness> {
+  let current = START.getTime();
+  const clock = () => new Date(current);
+  const deps = await buildDeps(
+    { VERCEL: "1", VERCEL_ENV: "production", NODE_ENV: "production", ...env },
+    clock,
+    async () => {
+      if (ON_POSTGRES) return PostgresStore.open(await migratedDatabase("production"));
+      const store = new MemoryFixtureStore("preview");
+      Object.defineProperty(store, "scope", { value: "production" });
+      return store;
+    },
+  );
   if (!deps.store) throw new Error("expected a store");
   const store = deps.store;
   return {
@@ -111,8 +144,8 @@ export function ctxFor(h: Harness, principal: Principal): OpContext {
 }
 
 /**
- * Registers a fixture agent with a throwaway credential made up for this test
- * run. Nothing here is a real credential and nothing is written outside memory.
+ * Registers an agent with a throwaway key made up for this test run, the way
+ * the key authenticator expects to find one. Nothing here is a real credential.
  */
 export async function addFixtureAgent(
   h: Harness,
@@ -132,12 +165,6 @@ export async function addFixtureAgent(
     }),
   );
   return { id, token };
-}
-
-/** Same harness, with the fixture agent authenticator switched on. */
-export function withAgentAuth(h: Harness): Harness {
-  const agentAuth = createFixtureAgentAuthenticator(h.store, h.deps.config.deployment);
-  return { ...h, deps: { ...h.deps, agentAuth } };
 }
 
 let keyCounter = 0;

@@ -44,7 +44,7 @@ function challenge(request: Request, deps: Deps, reason: "invalid" | "insufficie
   return `Bearer ${parts.join(", ")}`;
 }
 
-export async function handleMcpRequest(request: Request, deps: Deps): Promise<Response> {
+async function handle(request: Request, deps: Deps): Promise<Response> {
   // Browsers always send Origin on cross-site requests. Agents running
   // server-side send none. A present but unknown origin is refused outright.
   const origin = request.headers.get("origin");
@@ -110,5 +110,20 @@ export async function handleMcpRequest(request: Request, deps: Deps): Promise<Re
     return rpcError(500, -32603, "Internal error.");
   } finally {
     void server.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Everything that can fail, including authentication and rate limiting, runs
+ * inside this one boundary. A store or driver error can quote private
+ * details, so it is never logged or returned: the caller gets the same fixed
+ * answer whatever went wrong.
+ */
+export async function handleMcpRequest(request: Request, deps: Deps): Promise<Response> {
+  try {
+    return await handle(request, deps);
+  } catch {
+    console.error("[trip-app] mcp request failed");
+    return rpcError(500, -32603, "Internal error.");
   }
 }

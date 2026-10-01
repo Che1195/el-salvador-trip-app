@@ -31,7 +31,7 @@ import {
   type TripSnapshot,
 } from "@/domain/model";
 import { DomainError } from "./errors";
-import { newId, sha256Hex, stableStringify } from "./hash";
+import { newId, randomToken, sha256Hex, stableStringify } from "./hash";
 import {
   DATA_KEYS,
   DATA_SCHEMAS,
@@ -453,6 +453,38 @@ const expectedRevision = revisionSchema.describe(
 );
 const confirm = z.boolean().optional().describe("True once the person has confirmed in the app.");
 const section = sectionSchema.describe("Which list the item belongs to.");
+
+// What each choice in "Create agent" grants. Chosen once at creation.
+const AGENT_PRESETS = {
+  full: ["trip:read", "trip:write", "packing:read", "packing:write"],
+  packing: ["packing:read", "packing:write"],
+  read: ["trip:read"],
+} as const satisfies Record<string, readonly Scope[]>;
+const AGENT_PRESET_NAMES = ["full", "packing", "read"] as const;
+const MAX_ACTIVE_AGENTS = 25;
+
+// One line, 1 to 40 characters, no control characters: it is the label shown in Activity.
+const agentNameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(40)
+  .regex(/^[^\p{Cc}\p{Zl}\p{Zp}]+$/u, "Use a single line without control characters.");
+
+/**
+ * A new key: "tpk_" and 32 random bytes in base64url, 47 characters in all.
+ * The prefix lets people and secret scanners recognize it. Only its SHA-256
+ * is ever stored.
+ */
+async function freshAgentKey(tx: StoreTx): Promise<{ key: string; credentialHash: string }> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const key = `tpk_${randomToken(32)}`;
+    const credentialHash = sha256Hex(key);
+    if ((await tx.getAgentByCredentialHash(credentialHash)) === null) return { key, credentialHash };
+  }
+  // 256 random bits never repeat in practice; if they somehow did, fail rather than guess.
+  throw new Error("Could not generate an unused key.");
+}
 
 const ALL_READ: readonly Scope[] = ["trip:read", "packing:read"];
 const ALL_WRITE: readonly Scope[] = ["trip:write", "packing:write"];
@@ -881,6 +913,54 @@ const definitions: OperationDef[] = [
         revokedAt: agent.revokedAt,
       }));
       return { agents: summaries };
+    },
+  }),
+
+  defineOp({
+    name: "create_agent",
+    title: "Create an agent",
+    description:
+      "Creates an agent with its own key and returns the key once. Only the key's SHA-256 is kept, so it cannot be shown again.",
+    audience: "web",
+    mutating: true,
+    destructive: false,
+    anyOfScopes: [],
+    input: z.strictObject({ name: agentNameSchema, preset: z.enum(AGENT_PRESET_NAMES), confirm }),
+    async run(ctx, input) {
+      requirePersonConfirmation(ctx, input.confirm);
+      // Not through runMutation: it stores each result for replay, and this
+      // result holds the key, which must never be stored anywhere.
+      return ctx.store.transaction(async (tx) => {
+        const active = (await tx.listAgents(ctx.tripId)).filter((agent) => agent.revokedAt === null);
+        const wanted = input.name.toLowerCase();
+        if (active.some((agent) => agent.name.toLowerCase() === wanted)) {
+          throw new DomainError("conflict", "An active agent already has that name.");
+        }
+        if (active.length >= MAX_ACTIVE_AGENTS) {
+          throw new DomainError("limit_exceeded", `A trip holds at most ${MAX_ACTIVE_AGENTS} active agents.`);
+        }
+
+        // Made inside the callback: the store may run it again after a
+        // collision with another transaction, and a retry must not reuse a key.
+        const { key, credentialHash } = await freshAgentKey(tx);
+
+        const scopes = [...AGENT_PRESETS[input.preset]];
+        const id = newId("agent");
+        const createdAt = iso(ctx.now);
+        await tx.putAgent({
+          id,
+          name: input.name,
+          grants: [{ tripId: ctx.tripId, scopes }],
+          credentialHash,
+          oauth: null,
+          createdAt,
+          revokedAt: null,
+        });
+        // The audit line holds the agent's id and the outcome, never the key or its hash.
+        await appendAudit(tx, ctx, "create_agent", { outcome: "ok", entityId: id });
+        const agent: AgentSummary = { id, name: input.name, scopes, createdAt, revokedAt: null };
+        return { status: "ok", agent, key };
+      });
     },
   }),
 

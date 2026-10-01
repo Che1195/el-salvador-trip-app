@@ -256,6 +256,25 @@ describe.each(BACKENDS)("store contract: $name", ({ create }) => {
     });
   });
 
+  it("refuses a second agent with the same credential hash, and leaves the first alone", async () => {
+    const store = await create();
+    await store.transaction((tx) => tx.putAgent(agent()));
+    await expect(
+      store.transaction((tx) => tx.putAgent(agent({ id: "agent_2", name: "Copycat" }))),
+    ).rejects.toThrow();
+    await store.transaction(async (tx) => {
+      expect(await tx.getAgent("agent_2")).toBeNull();
+      expect((await tx.getAgentByCredentialHash("hash-one"))?.id).toBe("agent_1");
+    });
+    // The same agent may be saved again, and agents without a hash never collide.
+    await store.transaction(async (tx) => {
+      await tx.putAgent(agent({ name: "Renamed" }));
+      await tx.putAgent(agent({ id: "agent_3", name: "No hash one", credentialHash: null }));
+      await tx.putAgent(agent({ id: "agent_4", name: "No hash two", credentialHash: null }));
+    });
+    expect((await store.transaction((tx) => tx.getAgent("agent_1")))?.name).toBe("Renamed");
+  });
+
   it("replaces an agent's grants and records revocation", async () => {
     const store = await create();
     await store.transaction((tx) => tx.putAgent(agent()));

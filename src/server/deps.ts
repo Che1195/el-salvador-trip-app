@@ -3,7 +3,7 @@
 import "server-only";
 import { SCOPES } from "@/domain/model";
 import {
-  createFixtureAgentAuthenticator,
+  createKeyAgentAuthenticator,
   disabledAgentAuthenticator,
   type AgentAuthenticator,
 } from "./agent-auth";
@@ -71,20 +71,24 @@ export async function buildDeps(
   }
 
   let agentAuth = disabledAgentAuthenticator;
-  if (store && config.deployment === "local" && config.agentAuth.mode === "local-fixture") {
-    const { credentialHash } = config.agentAuth;
-    await store.transaction((tx) =>
-      tx.putAgent({
-        id: LOCAL_FIXTURE_AGENT_ID,
-        name: "Local fixture agent",
-        grants: [{ tripId: config.tripId, scopes: [...SCOPES] }],
-        credentialHash,
-        oauth: null,
-        createdAt: clock().toISOString(),
-        revokedAt: null,
-      }),
-    );
-    agentAuth = createFixtureAgentAuthenticator(store, config.deployment);
+  if (store && config.agentAuth.mode === "keys") {
+    const { localFixtureCredentialHash } = config.agentAuth;
+    if (localFixtureCredentialHash) {
+      // Local development only (config leaves the hash null elsewhere): one
+      // agent record that the developer's own token opens.
+      await store.transaction((tx) =>
+        tx.putAgent({
+          id: LOCAL_FIXTURE_AGENT_ID,
+          name: "Local fixture agent",
+          grants: [{ tripId: config.tripId, scopes: [...SCOPES] }],
+          credentialHash: localFixtureCredentialHash,
+          oauth: null,
+          createdAt: clock().toISOString(),
+          revokedAt: null,
+        }),
+      );
+    }
+    agentAuth = createKeyAgentAuthenticator(store);
   }
 
   return { config, store, agentAuth, clock };
