@@ -125,9 +125,10 @@ Each needs a decision or an action from the owner before work continues.
 
 ## Next action
 
-The owner signs in to production and enters the trip's details (the app asks
-on first sign-in). Then: preview sign-in secrets and browser QA on the
-preview (gate 6), and real trip content (gate 5).
+Once per-agent keys are merged: in production, More, Agents, Create agent, one
+per agent (Melo, Jeff, each Grok bot), and connect each with its key. Then:
+preview sign-in secrets and browser QA on the preview (gate 6), OAuth for Nova
+(gate 3), and real trip content (gate 5).
 
 ## Accepted risks
 
