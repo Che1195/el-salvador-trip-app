@@ -15,7 +15,7 @@ They are never committed, and neither is any password, key or token.
 |---|---|
 | Web app, domain rules, MCP server | Built. Tested on the in-memory fixture and on an in-process Postgres |
 | Durable storage | Postgres store and migrations built. No database connected yet; see [docs/storage.md](docs/storage.md) |
-| Production sign-in | Not configured. Production refuses all requests until its secrets are set |
+| Production sign-in | Secrets set. Sign-in starts working once a database is connected |
 | Remote agent access | Off. Every deployed environment answers 503 on `/api/mcp`. OAuth token checks are built and tested against a fake provider only |
 | ChatGPT, Muse or other hosted agents | Not verified. See [docs/mcp.md](docs/mcp.md) |
 | Hosting | Vercel project linked to this repository, with no secrets and no database. Deployments show a "not set up yet" page and refuse every data request |

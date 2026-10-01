@@ -93,8 +93,10 @@ Each needs a decision or an action from the owner before work continues.
    credentials are handled separately. The store and migrations are ready.
    Next: the database owner runs `db:migrate` on each database and sets
    `DATABASE_URL` in Vercel. See [storage.md](storage.md).
-2. **Production secrets.** `SESSION_SECRET` and `TRIP_PASSWORD_HASH` are set by
-   the owner, never by an agent. See the README.
+2. **Production secrets.** Done 2026-10-01: the owner set `TRIP_PASSWORD_HASH`
+   and `SESSION_SECRET` for Production in Vercel from their own terminal, and
+   production's `/api/health` now reports `"signIn":"ready"`. Secrets are
+   only ever set by the owner, never by an agent.
 3. **Agent authorization provider.** The token checks and metadata are built
    and tested against a fake. Still needed: choose a provider, build
    enrollment, wire configuration, prove a real connection. See
@@ -116,9 +118,10 @@ Each needs a decision or an action from the owner before work continues.
 
 ## Next action
 
-The owner sets `TRIP_PASSWORD_HASH` and `SESSION_SECRET` for Production in
-Vercel (gate 2). Production keeps refusing data requests until the database
-is connected too (gate 1).
+Connect the production database (gate 1): create the Neon project, run
+`db:migrate` with `--scope production --confirm-production`, and set
+`DATABASE_URL` for Production in Vercel. Until then production keeps refusing
+data requests, and sign-in answers that the app is not set up yet.
 
 ## Accepted risks
 
