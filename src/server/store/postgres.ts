@@ -413,7 +413,6 @@ export class PostgresStore implements Store {
   private constructor(
     private readonly db: SqlDatabase,
     readonly scope: DataScope,
-    readonly schemaVersion: number,
     private readonly retry: RetryOptions,
   ) {}
 
@@ -437,7 +436,7 @@ export class PostgresStore implements Store {
     }
     const scope = await readDataScope(db);
     if (scope === null) throw new StoreUnavailableError("scope_marker_missing");
-    return new PostgresStore(db, scope, version, { ...DEFAULT_RETRY, ...retry });
+    return new PostgresStore(db, scope, { ...DEFAULT_RETRY, ...retry });
   }
 
   /**
@@ -462,6 +461,11 @@ export class PostgresStore implements Store {
    * Durable fixed-window counter. The increment is a single atomic statement,
    * so it counts correctly across every server instance.
    */
+  /** Read fresh, so a long-lived server instance reports a migration as soon as it runs. */
+  readSchemaVersion(): Promise<number> {
+    return currentSchemaVersion(this.db);
+  }
+
   async hitRateLimit(key: string, limit: number, windowMs: number, now: Date): Promise<RateLimitResult> {
     const nowMs = now.getTime();
     const windowStart = Math.floor(nowMs / windowMs) * windowMs;

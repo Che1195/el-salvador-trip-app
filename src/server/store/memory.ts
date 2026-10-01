@@ -162,7 +162,6 @@ class MemoryTx implements StoreTx {
 export class MemoryFixtureStore implements Store {
   readonly kind = "memory-fixture" as const;
   readonly durable = false;
-  readonly schemaVersion = null;
 
   private state: State = {
     entities: new Map(),
@@ -197,6 +196,10 @@ export class MemoryFixtureStore implements Store {
     const next = this.tail.then(run, run);
     this.tail = next.catch(() => undefined);
     return next;
+  }
+
+  async readSchemaVersion(): Promise<number | null> {
+    return null;
   }
 
   async hitRateLimit(

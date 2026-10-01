@@ -164,16 +164,29 @@ describe("opening the store", () => {
 
   it("opens a database at either accepted version, and reports which one it found", async () => {
     const latest = await PostgresStore.open(await migratedDatabase("preview"));
-    expect(latest.schemaVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect(await latest.readSchemaVersion()).toBe(LATEST_SCHEMA_VERSION);
 
     // A database migrated only to version 1, as production is before step two.
     const v1 = emptyDatabase();
     await applyMigrations(v1, loadMigrations(MIGRATIONS_DIR).filter((m) => m.version === 1));
     await initializeDataScope(v1, "preview");
     const older = await PostgresStore.open(v1);
-    expect(older.schemaVersion).toBe(1);
+    expect(await older.readSchemaVersion()).toBe(1);
     await older.transaction((tx) => tx.setSessionEpoch("trip_1", 2));
     expect(await older.transaction((tx) => tx.getSessionEpoch("trip_1"))).toBe(2);
+  });
+
+  it("reports a migration on the health route as soon as it runs, without a restart", async () => {
+    const v1 = emptyDatabase();
+    const migrations = loadMigrations(MIGRATIONS_DIR);
+    await applyMigrations(v1, migrations.filter((m) => m.version === 1));
+    await initializeDataScope(v1, "preview");
+    const store = await PostgresStore.open(v1);
+    const deps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, undefined, async () => store);
+    const version = async () => (await (await handleHealth(makeRequest("/api/health"), deps)).json()).schemaVersion;
+    expect(await version()).toBe(1);
+    await applyMigrations(v1, migrations);
+    expect(await version()).toBe(LATEST_SCHEMA_VERSION);
   });
 
   it("refuses a schema version nobody has reviewed for this code", async () => {

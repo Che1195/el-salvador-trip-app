@@ -481,7 +481,7 @@ describe("private data stays out of errors, logs and caches", () => {
       storage: h.store.kind,
       durableStorage: h.store.durable,
       agentAccess: "keys",
-      schemaVersion: h.store.schemaVersion,
+      schemaVersion: await h.store.readSchemaVersion(),
       commit: null,
     });
   });
