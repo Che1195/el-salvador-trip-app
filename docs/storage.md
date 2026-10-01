@@ -1,8 +1,9 @@
 # Storage
 
-Status: **the Postgres store is built and tested without a server. No
-database is provisioned or connected.** Nothing here has run against a real
-Postgres.
+Status: **connected 2026-10-01.** Production and preview each run on their
+own Neon project, migrated by the owner with `db:migrate`, and each
+deployment's health report shows `storage: postgres`. The store's automated
+tests still run on an in-process Postgres, not on these databases.
 
 ## Two stores, one contract
 
@@ -103,7 +104,8 @@ production. The preview database holds fixtures only.
 
 ## Setting up a database
 
-For the database owner. Do preview first (with sample data), then
+For the database owner. Done for both environments on 2026-10-01; kept for
+rebuilding or adding an environment. Do preview first (with sample data), then
 production (without). The Neon projects already exist; identify them by
 project ID, since both have a default branch named "production":
 

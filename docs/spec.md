@@ -1,9 +1,9 @@
 # Trip planner: specification
 
 Status: initial build merged to `main` (PR #1, 2026-09-30). Production is
-live at https://el-salvador-trip-app.vercel.app and refuses every data request
-until storage and secrets are set. Locally the app runs on a fixture; the
-Postgres store is built and tested without a server. Last updated 2026-09-30.
+live at https://el-salvador-trip-app.vercel.app on its own Neon Postgres
+database, with sign-in configured (2026-10-01). Remote agent access stays off.
+Last updated 2026-10-01.
 
 This file is the single record of what was agreed. Update it whenever scope,
 a decision, or the next action changes.
@@ -33,7 +33,6 @@ two people.
 - Managing several trips. Records, sessions and agent grants all carry a
   `tripId`, and the trip's title, destination and dates are an editable record
   rather than code, but there is one trip and no trip switcher.
-- A connected database. The Postgres store exists; no database does yet.
 - Remote agent access. It stays off until an OAuth integration is verified.
 - Any real trip content, password, key, token, or database credential.
 - Applying migrations to a hosted database, or reading its connection string.
@@ -47,7 +46,8 @@ two people.
 | Decision | Choice | Why |
 |---|---|---|
 | Stack | Next.js 16, Tailwind 4, TypeScript, bun, Vercel | Requested |
-| Storage | New Neon Postgres, Free plan; two separate projects (production, preview) | $0, no card, fits the data size. Approved by the owner; not yet connected |
+| Storage | Neon Postgres, Free plan; two separate projects: trip-planner-production (`restless-fire-29986419`) and trip-planner-development (`muddy-boat-80356130`, preview) | $0, no card, fits the data size. Approved by the owner; connected 2026-10-01 |
+| Database connections | Direct connection for migrations, run by the owner; pooled connection for Vercel's `DATABASE_URL`. Each string only in its own Vercel environment | Migrations need one stable session; serverless functions open many short ones |
 | Hosting | Vercel, Hobby plan, linked through the existing GitHub integration. `main` deploys to production; other branches get previews. No environment variables set | Requested |
 | Code review | The owner reviews the collaborator's pull requests. The owner's own pull requests may merge without a reviewer | Owner's decision |
 | Preview data | Fixtures only | A Neon preview branch would be a copy of production |
@@ -89,10 +89,12 @@ two people.
 
 Each needs a decision or an action from the owner before work continues.
 
-1. **Storage connection.** Neon Free is approved; project creation and
-   credentials are handled separately. The store and migrations are ready.
-   Next: the database owner runs `db:migrate` on each database and sets
-   `DATABASE_URL` in Vercel. See [storage.md](storage.md).
+1. **Storage connection.** Done 2026-10-01. The owner migrated both databases
+   from their own terminal and set each pooled string in its own Vercel
+   environment. Preview: schema 1, marker `preview`, a trip present (expected
+   to be the fictitious sample). Production: schema 1, marker `production`, no
+   trip yet. Production health reports `storage: postgres` and `signIn: ready`;
+   the preview reports `storage: postgres`.
 2. **Production secrets.** Done 2026-10-01: the owner set `TRIP_PASSWORD_HASH`
    and `SESSION_SECRET` for Production in Vercel from their own terminal, and
    production's `/api/health` now reports `"signIn":"ready"`. Secrets are
@@ -118,10 +120,9 @@ Each needs a decision or an action from the owner before work continues.
 
 ## Next action
 
-Connect the production database (gate 1): create the Neon project, run
-`db:migrate` with `--scope production --confirm-production`, and set
-`DATABASE_URL` for Production in Vercel. Until then production keeps refusing
-data requests, and sign-in answers that the app is not set up yet.
+The owner signs in to production and enters the trip's details (the app asks
+on first sign-in). Then: preview sign-in secrets and browser QA on the
+preview (gate 6), and real trip content (gate 5).
 
 ## Accepted risks
 
