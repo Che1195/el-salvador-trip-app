@@ -1,7 +1,8 @@
 // These tests speak the real MCP protocol: the SDK's client talks Streamable
 // HTTP to the app's own request handler, with `fetch` wired straight to it.
-// They cover the local fixture only. No hosted agent client (ChatGPT, Muse or
-// any other) is exercised here, and none is claimed to work.
+// They cover the key authenticator on a local app only. No hosted agent
+// client (ChatGPT, Muse or any other) is exercised here, and none is claimed
+// to work.
 
 import { randomBytes } from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -20,7 +21,6 @@ import {
   ORIGIN,
   signIn,
   webPrincipal,
-  withAgentAuth,
   type Harness,
 } from "./support/harness";
 
@@ -60,41 +60,59 @@ async function callTool(client: Client, name: string, args: Record<string, unkno
 }
 
 async function agentHarness(scopes: Scope[] = ALL_SCOPES) {
-  const h = withAgentAuth(await makeHarness());
+  const h = await makeHarness();
   const agent = await addFixtureAgent(h, scopes);
   return { h, agent, client: await connect(h, agent.token) };
 }
 
-describe("agent access is off unless explicitly configured", () => {
-  it("answers 503 by default, even with a well-formed bearer token", async () => {
+describe("agent access is closed until a key is created", () => {
+  it("answers 401 with no key made yet, even for a well-formed bearer token", async () => {
     const h = await makeHarness();
-    expect(h.deps.agentAuth.mode).toBe("disabled");
+    expect(h.deps.agentAuth.mode).toBe("keys");
     const response = await handleMcpRequest(rawInitialize({ Authorization: `Bearer ${"a".repeat(43)}` }), h.deps);
-    expect(response.status).toBe(503);
-    expect((await response.json()).error.message).toBe("Agent access is not set up for this environment.");
+    expect(response.status).toBe(401);
   });
 
-  it("stays off in preview and production whatever the environment says", async () => {
-    for (const VERCEL_ENV of ["preview", "production"]) {
+  it("answers 503 without a store or with AGENT_ACCESS=off, whatever the environment says", async () => {
+    const closed: [string, Record<string, string>][] = [
+      ["production, no store", { VERCEL_ENV: "production" }],
+      ["preview, no store", { VERCEL_ENV: "preview" }],
+      ["preview, switched off", { VERCEL_ENV: "preview", TRIP_FIXTURE_PREVIEW: "1", AGENT_ACCESS: "off" }],
+    ];
+    for (const [label, extra] of closed) {
       const deps = await buildDeps({
         VERCEL: "1",
-        VERCEL_ENV,
         NODE_ENV: "production",
-        TRIP_FIXTURE_PREVIEW: "1",
         MCP_DEV_FIXTURE_TOKEN: "t".repeat(40),
+        ...extra,
       });
+      expect(deps.agentAuth.mode, label).toBe("disabled");
       const response = await handleMcpRequest(rawInitialize({ Authorization: `Bearer ${"t".repeat(40)}` }), deps);
-      expect(response.status, VERCEL_ENV).toBe(503);
+      expect(response.status, label).toBe(503);
     }
   });
 
-  it("turns on locally only with a long enough developer-supplied token", async () => {
+  it("ignores the developer token outside local development", async () => {
+    const deps = await buildDeps({
+      VERCEL: "1",
+      VERCEL_ENV: "preview",
+      NODE_ENV: "production",
+      TRIP_FIXTURE_PREVIEW: "1",
+      MCP_DEV_FIXTURE_TOKEN: "t".repeat(40),
+    });
+    expect(deps.agentAuth.mode).toBe("keys");
+    const response = await handleMcpRequest(rawInitialize({ Authorization: `Bearer ${"t".repeat(40)}` }), deps);
+    expect(response.status).toBe(401);
+  });
+
+  it("seeds a local fixture agent only from a long enough developer-supplied token", async () => {
     const short = await makeHarness({ MCP_DEV_FIXTURE_TOKEN: "too-short" });
-    expect(short.deps.agentAuth.mode).toBe("disabled");
+    expect(short.deps.agentAuth.mode).toBe("keys");
+    expect((await executeOperation(ctxFor(short, webPrincipal(short)), "list_agents", {})).agents).toEqual([]);
 
     const token = randomBytes(32).toString("base64url");
     const h = await makeHarness({ MCP_DEV_FIXTURE_TOKEN: token });
-    expect(h.deps.agentAuth.mode).toBe("local-fixture");
+    expect(h.deps.agentAuth.mode).toBe("keys");
     const client = await connect(h, token);
     const result = await callTool(client, "get_packing_list", {});
     expect(result.structuredContent?.totalCount).toBeGreaterThan(0);
@@ -105,7 +123,7 @@ describe("agent access is off unless explicitly configured", () => {
 
 describe("agent credentials", () => {
   it("rejects missing, wrong and misplaced credentials with 401", async () => {
-    const h = withAgentAuth(await makeHarness());
+    const h = await makeHarness();
     const agent = await addFixtureAgent(h, ALL_SCOPES);
     const cookie = await signIn(h);
     const attempts: [string, Request][] = [
@@ -140,19 +158,20 @@ describe("agent credentials", () => {
   });
 
   it("gives an agent with no grant on this trip nothing", async () => {
-    const h = withAgentAuth(await makeHarness());
+    const h = await makeHarness();
     const token = randomBytes(32).toString("base64url");
     const { sha256Hex } = await import("@/server/hash");
     await h.store.transaction((tx) =>
       tx.putAgent({ id: "agent_other_trip", name: "Other", grants: [{ tripId: "trip_other", scopes: ALL_SCOPES }], credentialHash: sha256Hex(token), oauth: null, createdAt: h.now().toISOString(), revokedAt: null }),
     );
-    expect((await handleMcpRequest(rawInitialize({ Authorization: `Bearer ${token}` }), h.deps)).status).toBe(401);
+    // A genuine key with nothing granted here is refused as such, not as unknown.
+    expect((await handleMcpRequest(rawInitialize({ Authorization: `Bearer ${token}` }), h.deps)).status).toBe(403);
   });
 });
 
 describe("transport rules", () => {
   it("refuses a browser origin it does not know, and allows none or its own", async () => {
-    const h = withAgentAuth(await makeHarness());
+    const h = await makeHarness();
     const agent = await addFixtureAgent(h, ALL_SCOPES);
     const auth = { Authorization: `Bearer ${agent.token}` };
     expect((await handleMcpRequest(rawInitialize({ ...auth, Origin: "https://evil.example" }), h.deps)).status).toBe(403);
@@ -160,8 +179,33 @@ describe("transport rules", () => {
     expect((await handleMcpRequest(rawInitialize(auth), h.deps)).status).toBe(200);
   });
 
+  it("keeps the status of protocol errors the library builds, but not the exception text inside them", async () => {
+    const h = await makeHarness();
+    const agent = await addFixtureAgent(h, ALL_SCOPES);
+    // The library catches unexpected exceptions while handling a request and
+    // copies their text into its 400 answer. Make reading the request's
+    // headers throw, which happens inside that guarded code.
+    const request = rawInitialize({ Authorization: `Bearer ${agent.token}` });
+    const trapped = new Headers(request.headers);
+    Object.defineProperty(trapped, "entries", {
+      value: () => {
+        throw new Error("SENTINEL_SECRET_TEXT");
+      },
+    });
+    Object.defineProperty(request, "headers", { value: trapped });
+
+    const response = await handleMcpRequest(request, h.deps);
+    expect(response.status).toBe(400);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    const text = await response.text();
+    expect(text).not.toContain("SENTINEL_SECRET_TEXT");
+    const body = JSON.parse(text);
+    expect(body.error).not.toHaveProperty("data");
+    expect(typeof body.error.code).toBe("number");
+  });
+
   it("offers no server stream and no session deletion", async () => {
-    const h = withAgentAuth(await makeHarness());
+    const h = await makeHarness();
     const agent = await addFixtureAgent(h, ALL_SCOPES);
     for (const method of ["GET", "DELETE"]) {
       const response = await handleMcpRequest(
@@ -174,7 +218,7 @@ describe("transport rules", () => {
   });
 
   it("limits body size and rejects malformed JSON", async () => {
-    const h = withAgentAuth(await makeHarness());
+    const h = await makeHarness();
     const agent = await addFixtureAgent(h, ALL_SCOPES);
     const post = (body: string) =>
       handleMcpRequest(

@@ -147,6 +147,14 @@ class MemoryTx implements StoreTx {
   }
 
   async putAgent(agent: AgentRecord) {
+    // Postgres has a UNIQUE column for the credential hash; match it here.
+    if (agent.credentialHash !== null) {
+      for (const other of this.state.agents.values()) {
+        if (other.id !== agent.id && other.credentialHash === agent.credentialHash) {
+          throw new Error("Another agent already has this credential hash.");
+        }
+      }
+    }
     this.state.agents.set(agent.id, copy(agent));
   }
 }

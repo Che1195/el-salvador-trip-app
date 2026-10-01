@@ -25,7 +25,13 @@ export default defineConfig({
         test: {
           name: "postgres",
           environment: "node",
-          include: ["tests/operations.test.ts", "tests/mcp.test.ts", "tests/routes.test.ts", "tests/oauth.test.ts"],
+          include: [
+            "tests/operations.test.ts",
+            "tests/mcp.test.ts",
+            "tests/routes.test.ts",
+            "tests/oauth.test.ts",
+            "tests/agent-keys.test.ts",
+          ],
           env: { TRIP_TEST_STORE: "pglite" },
           testTimeout: 60000,
         },

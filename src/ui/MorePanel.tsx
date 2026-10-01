@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ActivityEntry, AgentSummary, TrashEntry, TripSnapshot } from "@/domain/model";
+import { AGENT_PRESETS, AgentKeyDialog } from "./AgentKeyDialog";
 import { ApiError, callOp, fetchActivity, leaveToSignIn, newIdempotencyKey, signOut } from "./api";
 import { ITEM_NOUN, SECTION_LABEL } from "./forms";
 import { formatDateRange, formatStamp } from "./format";
@@ -41,6 +42,15 @@ function describe(entry: ActivityEntry): string {
 }
 
 const panelClass = "rounded-lg border border-line bg-surface";
+
+/** The preset an agent's scopes correspond to, in words, or the raw scopes. */
+function permissionLabel(scopes: readonly string[]): string {
+  const has = (scope: string) => scopes.includes(scope);
+  if (has("trip:write")) return AGENT_PRESETS[0].label;
+  if (has("packing:write") && !has("trip:read")) return AGENT_PRESETS[1].label;
+  if (scopes.length === 1 && has("trip:read")) return AGENT_PRESETS[2].label;
+  return scopes.join(", ");
+}
 const quietButton = "rounded-md border border-line px-3 py-2 text-sm font-semibold text-anil";
 
 export function MorePanel({
@@ -61,6 +71,7 @@ export function MorePanel({
   const [activity, setActivity] = useState<ActivityEntry[] | null>(null);
   const [trash, setTrash] = useState<TrashEntry[]>([]);
   const [agents, setAgents] = useState<AgentSummary[]>([]);
+  const [creatingAgent, setCreatingAgent] = useState(false);
 
   // Reload whenever the trip changes, so this panel matches what was just saved.
   useEffect(() => {
@@ -191,19 +202,30 @@ export function MorePanel({
       </section>
 
       <section>
-        <h2 className="type-wide mb-1 text-2xl">Agents</h2>
+        <div className="mb-1 flex items-end justify-between gap-3">
+          <h2 className="type-wide text-2xl">Agents</h2>
+          <button
+            type="button"
+            onClick={() => setCreatingAgent(true)}
+            className="rounded-md bg-anil px-4 py-2.5 text-sm font-semibold text-white"
+            data-testid="create-agent"
+          >
+            Create agent
+          </button>
+        </div>
         <p className="mb-3 text-sm text-ash">
-          Assistants that can read or change this trip for you. Each has its own access, separate from the trip password.
+          Assistants that can read or change this trip for you. Each has its own key, separate from the trip password, and
+          none can remove anything.
         </p>
         {agents.length === 0 ? (
-          <p className="text-ash">No agent is connected.</p>
+          <p className="text-ash">No agent is connected yet.</p>
         ) : (
           <ul className={`${panelClass} divide-y divide-line`} data-testid="agents">
             {agents.map((agent) => (
               <li key={agent.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
                 <p className="min-w-0">
                   <span className="block font-semibold">{agent.name}</span>
-                  <span className="block text-xs text-ash">{agent.revokedAt ? "Revoked" : agent.scopes.join(", ")}</span>
+                  <span className="block text-xs text-ash">{agent.revokedAt ? "Revoked" : permissionLabel(agent.scopes)}</span>
                 </p>
                 {!agent.revokedAt && (
                   <button
@@ -222,6 +244,9 @@ export function MorePanel({
               </li>
             ))}
           </ul>
+        )}
+        {creatingAgent && (
+          <AgentKeyDialog onClose={() => setCreatingAgent(false)} onCreated={() => void onChanged()} />
         )}
       </section>
 

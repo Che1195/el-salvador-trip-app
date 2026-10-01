@@ -3,10 +3,11 @@
 MCP (Model Context Protocol) is the standard an AI agent uses to call an
 app's tools. This app has an MCP server at `/api/mcp`.
 
-Status: **tested locally against a fixture and a fake OAuth provider. Remote
-agent access is off in every deployed environment.** No connection from
-ChatGPT, Muse, or any other hosted agent has been attempted, so none is
-claimed to work.
+Status: **agents connect with per-agent keys that a signed-in person creates
+in the app.** Without a key, nothing gets in. OAuth, which ChatGPT needs, is
+built and tested against a fake provider only and stays off. No hosted agent
+(Muse, Grok, ChatGPT or any other) has connected yet, so none is claimed to
+work until it has.
 
 ## What is tested and what is not
 
@@ -16,7 +17,9 @@ claimed to work.
 | Scopes, revocation, idempotency, conflicts, audit, no agent removals | Tested locally |
 | Access-token validation: signature, issuer, audience, expiry, algorithm, token type | Tested against a fake provider in `tests/oauth.test.ts` |
 | Protected resource metadata and the 401/403 `WWW-Authenticate` challenges | Tested against the fake provider |
-| A deployed environment accepting an agent | Off: every request gets 503, and the metadata route answers 404 |
+| Per-agent keys: creation, key shown once and stored only as SHA-256, scopes, revocation, error handling | Tested on both stores in `tests/agent-keys.test.ts` |
+| A deployed environment accepting an agent with a key | Built; no hosted agent has connected yet |
+| OAuth in a deployed environment | Off: never constructed outside tests, and the metadata route answers 404 |
 | A real authorization server | Not chosen, not connected |
 | Enrolling an OAuth agent (creating its record from the app) | Not built |
 | ChatGPT connecting | Not verified |
@@ -44,8 +47,19 @@ agent credential, and a web session cookie is not accepted on `/api/mcp`.
 An agent is only shown the tools its scopes can use, and each call is checked
 again.
 
-**Revocation.** Revoking an agent in the app (More, Agents) takes effect on
-its next request. Other agents and the people signed in are unaffected.
+**Keys.** A signed-in person creates each agent in the app (More, Agents,
+Create agent), names it, and picks what it may do: add and edit everything,
+packing list only, or read only. The app shows the key (it starts with
+`tpk_`) once and stores only its SHA-256. It cannot be shown again; to
+replace a key, revoke the agent and create it again (a revoked agent's name
+can be reused). At most 25 active agents per trip. Agents themselves can
+never create, list or revoke agents.
+
+**Revocation.** Revoking an agent in the app takes effect on its next
+request; a request already past the key check may finish. Other agents and
+the people signed in are unaffected. To turn off every agent at once, set
+`AGENT_ACCESS=off` for the environment in Vercel and redeploy (about a
+minute; environment variables only reach new deployments).
 
 **No removals by agents.** Agents cannot remove an item, undo a whole batch,
 or undo an addition or a restore, because each of those takes a record out of
@@ -76,6 +90,32 @@ cannot set one.
 **Content is not instructions.** Notes and titles are returned as data. The
 server tells agents so, and nothing stored in the trip can grant a permission:
 authorization is decided before any content is read.
+
+## Connecting an agent
+
+1. In the app: More, Agents, **Create agent**. Name it (the name appears next
+   to everything it changes), pick its permissions, and copy the key.
+2. In the agent's MCP or connector settings, add a server:
+   - Address: `https://el-salvador-trip-app.vercel.app/api/mcp`
+   - Transport: Streamable HTTP
+   - Authentication: bearer token, the key. As a raw header it is
+     `Authorization: Bearer <key>`.
+3. Ask the agent to read the trip. Its changes show under Activity with its
+   name, and any of them can be undone in the app.
+
+The key goes only into the agent's connection settings, never into a chat
+message, a URL or a repository.
+
+Per client. None of these has been tried against this server yet, so check
+each client's current documentation:
+
+| Agent | Client | How to give it the key |
+|---|---|---|
+| Melo, Jeff | Muse | The MCP app's bearer token or custom header field |
+| Grok bots | xAI | A remote MCP server entry with an authorization header, if the bot runs through xAI's API |
+| Claude Code | Claude Code | An HTTP MCP server with an `Authorization` header. The header value is saved in Claude Code's settings file in plain text |
+| Codex | Codex CLI | A Streamable HTTP MCP server whose bearer token is read from an environment variable |
+| Nova | ChatGPT | Not with a key: OpenAI's documentation says ChatGPT sends no custom keys and needs OAuth, which is not turned on |
 
 ## Tools
 
@@ -156,9 +196,9 @@ That URL serves the RFC 9728 metadata document naming the resource, its
 authorization server and its scopes.
 
 **Off until verified.** Nothing outside the tests constructs the OAuth
-authenticator. Deployed environments use the disabled authenticator no matter
-which environment variables are set, and a test checks that. Turning it on
-requires, in order:
+authenticator. Deployed environments use per-agent keys (or nothing, with
+`AGENT_ACCESS=off`) no matter which OAuth-looking environment variables are
+set, and tests check that. Turning OAuth on requires, in order:
 
 1. Choosing an authorization server that supports what ChatGPT needs (PKCE
    S256; CIMD or dynamic client registration; the `resource` parameter

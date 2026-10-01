@@ -97,7 +97,7 @@ describe("route inventory", () => {
     expect(SESSION_ROUTES.map((r) => `${r.method} ${r.path}`).sort()).toEqual(tabled.sort());
   });
 
-  it("serves no OAuth metadata from the real routes while agent access is off", async () => {
+  it("serves no OAuth metadata from the real routes while agents use keys", async () => {
     for (const path of [".well-known/oauth-protected-resource", ".well-known/oauth-protected-resource/[...path]"]) {
       const mod = await routeModules[`../src/app/${path}/route.ts`]();
       const handler = mod.GET as (request: Request) => Promise<Response>;
@@ -113,8 +113,8 @@ describe("route inventory", () => {
         if (access === "public") continue;
         const handler = mod[method] as (request: Request) => Promise<Response>;
         const response = await handler(makeRequest(`/${path}`, { method, body: {} }));
-        // Session routes: 401. Agent route: 503 (agent access is off) or 405.
-        const expected = access === "session" ? [401] : [503, 405];
+        // Session routes: 401. Agent route: 401 (no key) or 405 (wrong method).
+        const expected = access === "session" ? [401] : [401, 405];
         expect(expected, `${method} /${path}`).toContain(response.status);
         expect(response.headers.get("cache-control"), path).toContain("no-store");
       }
@@ -480,7 +480,7 @@ describe("private data stays out of errors, logs and caches", () => {
       signIn: "ready",
       storage: h.store.kind,
       durableStorage: h.store.durable,
-      agentAccess: "disabled",
+      agentAccess: "keys",
     });
   });
 });

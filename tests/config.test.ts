@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { createFixtureAgentAuthenticator } from "@/server/agent-auth";
 import { loadConfig, resolveDeployment } from "@/server/config";
 import { buildDeps } from "@/server/deps";
 import { hashPassword, verifyPassword } from "@/server/password";
@@ -29,7 +28,7 @@ describe("production fails closed", () => {
     expect(deps.agentAuth.mode).toBe("disabled");
   });
 
-  it("never uses the fixture store, fixture password or fixture agent in production", async () => {
+  it("never uses the fixture store, fixture password or developer-token agent in production", async () => {
     const deps = await buildDeps({
       VERCEL: "1",
       VERCEL_ENV: "production",
@@ -40,6 +39,8 @@ describe("production fails closed", () => {
     expect(deps.store).toBeNull();
     expect(deps.config.auth.ready).toBe(false);
     expect(deps.agentAuth.mode).toBe("disabled");
+    // Configuration never carries a developer token outside local development.
+    expect(deps.config.agentAuth).toEqual({ mode: "keys", localFixtureCredentialHash: null });
   });
 
   it("refuses to construct fixtures for production directly", async () => {
@@ -47,8 +48,6 @@ describe("production fails closed", () => {
     const store = new MemoryFixtureStore("preview");
     Object.defineProperty(store, "scope", { value: "production" });
     await expect(seedSampleTrip(store, "trip_1", new Date())).rejects.toThrow();
-    expect(() => createFixtureAgentAuthenticator(new MemoryFixtureStore("preview"), "production")).toThrow();
-    expect(() => createFixtureAgentAuthenticator(new MemoryFixtureStore("preview"), "preview")).toThrow();
   });
 
   it("rejects a short signing secret or a weak or malformed password hash", async () => {
@@ -74,9 +73,10 @@ describe("preview is separate from production", () => {
     expect(optedIn.store?.kind).toBe("memory-fixture");
     expect(optedIn.store?.scope).toBe("preview");
     expect(optedIn.store?.durable).toBe(false);
-    // Still no sign-in without its own secrets, and never remote agent access.
+    // Still no sign-in without its own secrets. Agent keys are the only way in
+    // for agents, and none exists until a signed-in person creates one.
     expect(optedIn.config.auth.ready).toBe(false);
-    expect(optedIn.agentAuth.mode).toBe("disabled");
+    expect(optedIn.agentAuth.mode).toBe("keys");
   });
 
   it("refuses a store whose data belongs to a different environment", async () => {

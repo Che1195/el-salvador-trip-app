@@ -2,7 +2,8 @@
 
 Status: initial build merged to `main` (PR #1, 2026-09-30). Production is
 live at https://el-salvador-trip-app.vercel.app on its own Neon Postgres
-database, with sign-in configured (2026-10-01). Remote agent access stays off.
+database, with sign-in configured (2026-10-01). Agents connect with per-agent
+keys created in the app; OAuth, needed for ChatGPT, stays off.
 Last updated 2026-10-01.
 
 This file is the single record of what was agreed. Update it whenever scope,
@@ -33,7 +34,8 @@ two people.
 - Managing several trips. Records, sessions and agent grants all carry a
   `tripId`, and the trip's title, destination and dates are an editable record
   rather than code, but there is one trip and no trip switcher.
-- Remote agent access. It stays off until an OAuth integration is verified.
+- Agent access over OAuth (needed for ChatGPT). It stays off until an
+  integration is verified. Per-agent keys are in scope.
 - Any real trip content, password, key, token, or database credential.
 - Applying migrations to a hosted database, or reading its connection string.
 - Choosing or connecting an OAuth authorization server, and enrolling OAuth
@@ -53,6 +55,7 @@ two people.
 | Preview data | Fixtures only | A Neon preview branch would be a copy of production |
 | Web auth | Shared password (scrypt hash in env), signed cookie plus a server-side session record | Sign-out and "sign out every device" must really revoke |
 | Agent auth | Separate per-agent records with scopes; shared password is never agent auth | Revoking one agent must not affect people or other agents |
+| Agent keys | A signed-in person creates each agent in the app and gets a `tpk_` key once; only its SHA-256 is stored; presets: everything, packing only, read only; at most 25 active per trip. All agents off: `AGENT_ACCESS=off` plus a redeploy. Plan: [plans/2026-10-01-agent-keys.md](plans/2026-10-01-agent-keys.md) | Lets Muse, Grok, Claude Code and Codex agents connect now; ChatGPT still needs OAuth |
 | Agent removals | Not available to agents at all | A token the agent can echo is not a person's consent |
 | Conflict handling | Per-item revision; stale edits are refused | Two phones and several agents write concurrently |
 | Deletes | Soft delete to a trash, with restore | Every mistake must be recoverable |
@@ -83,7 +86,8 @@ two people.
 | Collisions are retried; other errors are not | `tests/postgres-store.test.ts` (scripted database) |
 | Rate limits are shared across instances | `tests/postgres-store.test.ts` |
 | Tokens are checked for signature, issuer, audience, expiry, algorithm | `tests/oauth.test.ts` |
-| Deployed environments keep agent access off | `tests/oauth.test.ts`, `tests/mcp.test.ts` |
+| OAuth is never constructed in a deployed environment | `tests/oauth.test.ts`, `tests/agent-keys.test.ts` |
+| Agent keys: shown once, stored only as SHA-256, scoped by preset, revocable, refused anywhere but the Authorization header, closed until a key exists | `tests/agent-keys.test.ts`, on both stores |
 
 ## Open gates
 
@@ -99,10 +103,11 @@ Each needs a decision or an action from the owner before work continues.
    and `SESSION_SECRET` for Production in Vercel from their own terminal, and
    production's `/api/health` now reports `"signIn":"ready"`. Secrets are
    only ever set by the owner, never by an agent.
-3. **Agent authorization provider.** The token checks and metadata are built
-   and tested against a fake. Still needed: choose a provider, build
-   enrollment, wire configuration, prove a real connection. See
-   [mcp.md](mcp.md).
+3. **Agent access.** Per-agent keys are built (2026-10-01): agents that can
+   send a bearer header connect with a key created in the app. Still needed
+   for ChatGPT (Nova): OAuth, meaning choose a provider, build enrollment,
+   wire configuration, and prove a real connection. No hosted agent has
+   connected yet. See [mcp.md](mcp.md).
 4. **Human approval path for agent removals.** Agents cannot remove items
    until a person can approve each removal in the app.
 5. **Real trip content.** Entered in the app, or seeded privately, only after
@@ -120,9 +125,10 @@ Each needs a decision or an action from the owner before work continues.
 
 ## Next action
 
-The owner signs in to production and enters the trip's details (the app asks
-on first sign-in). Then: preview sign-in secrets and browser QA on the
-preview (gate 6), and real trip content (gate 5).
+Once per-agent keys are merged: in production, More, Agents, Create agent, one
+per agent (Melo, Jeff, each Grok bot), and connect each with its key. Then:
+preview sign-in secrets and browser QA on the preview (gate 6), OAuth for Nova
+(gate 3), and real trip content (gate 5).
 
 ## Accepted risks
 

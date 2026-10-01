@@ -4,7 +4,7 @@
 // What this proves: the resource-server side behaves as the MCP authorization
 // specification requires, for tokens shaped like the fake provider's.
 // What it does not prove: that any real provider, or ChatGPT, Muse or another
-// hosted client, works with it. Deployed environments keep agent access off.
+// hosted client, works with it. Deployed environments never construct it.
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -12,14 +12,14 @@ import { SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Scope } from "@/domain/model";
 import { LOCAL_FIXTURE_PASSWORD } from "@/server/config";
-import { buildDeps } from "@/server/deps";
+import { buildDeps, type Deps } from "@/server/deps";
 import { handleMcpRequest } from "@/server/mcp/handler";
 import { createOAuthAgentAuthenticator } from "@/server/oauth/authenticator";
 import { handleProtectedResourceMetadata, resourceMetadataUrl } from "@/server/oauth/metadata";
 import { createJwtAccessTokenVerifier } from "@/server/oauth/token-verifier";
 import { executeOperation } from "@/server/operations";
 import { createFakeProvider, FAKE_ISSUER, FAKE_RESOURCE, handmadeToken, type FakeProvider } from "./support/fake-oauth";
-import { ctxFor, key, makeHarness, makeRequest, signIn, webPrincipal, type Harness } from "./support/harness";
+import { ctxFor, key, makeHarness, makeProductionHarness, makeRequest, signIn, webPrincipal, type Harness } from "./support/harness";
 
 const ALL: Scope[] = ["trip:read", "trip:write", "packing:read", "packing:write"];
 const METADATA_URL = "http://localhost:3000/.well-known/oauth-protected-resource/api/mcp";
@@ -295,33 +295,51 @@ describe("protected resource metadata", () => {
     expect(resourceMetadataUrl("https://trip.example.com/")).toBe("https://trip.example.com/.well-known/oauth-protected-resource");
   });
 
-  it("is absent while agent access is off or on the local fixture", async () => {
-    const off = await makeHarness();
+  it("is absent while agent access is off or uses keys", async () => {
+    const off = await makeHarness({ AGENT_ACCESS: "off" });
+    expect(off.deps.agentAuth.mode).toBe("disabled");
     expect((await get("/.well-known/oauth-protected-resource", off)).status).toBe(404);
     expect((await get("/.well-known/oauth-protected-resource/api/mcp", off)).status).toBe(404);
-    const fixture = await makeHarness({ MCP_DEV_FIXTURE_TOKEN: "t".repeat(40) });
-    expect(fixture.deps.agentAuth.mode).toBe("local-fixture");
-    expect((await get("/.well-known/oauth-protected-resource", fixture)).status).toBe(404);
+    const keys = await makeHarness({ MCP_DEV_FIXTURE_TOKEN: "t".repeat(40) });
+    expect(keys.deps.agentAuth.mode).toBe("keys");
+    expect((await get("/.well-known/oauth-protected-resource", keys)).status).toBe(404);
+    expect((await get("/.well-known/oauth-protected-resource/api/mcp", keys)).status).toBe(404);
   });
 });
 
-describe("deployed environments keep agent access off", () => {
-  it("ignores every OAuth-looking setting: no authenticator, no metadata, 503 on the endpoint", async () => {
+describe("deployed environments never construct the OAuth authenticator", () => {
+  it("ignores every OAuth-looking setting: key mode, no metadata, no OAuth challenge", async () => {
+    const oauthLooking = {
+      MCP_OAUTH_ISSUER: FAKE_ISSUER,
+      MCP_OAUTH_JWKS_URI: `${FAKE_ISSUER}/.well-known/jwks.json`,
+      MCP_OAUTH_RESOURCE: FAKE_RESOURCE,
+      MCP_RESOURCE: FAKE_RESOURCE,
+      OAUTH_ISSUER: FAKE_ISSUER,
+      AGENT_ACCESS: "enabled",
+      MCP_DEV_FIXTURE_TOKEN: "t".repeat(40),
+    };
+    const deployments: [string, Deps][] = [
+      [
+        "preview",
+        await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview", NODE_ENV: "production", TRIP_FIXTURE_PREVIEW: "1", ...oauthLooking }),
+      ],
+      ["production", (await makeProductionHarness(oauthLooking)).deps],
+    ];
+    for (const [label, deps] of deployments) {
+      expect(deps.agentAuth.mode, label).toBe("keys");
+      expect(deps.agentAuth.protectedResource, label).toBeUndefined();
+      const refused = await handleMcpRequest(initialize(bearer("a".repeat(40))), deps);
+      expect(refused.status, label).toBe(401);
+      expect(refused.headers.get("www-authenticate"), label).toBe('Bearer realm="trip-planner"');
+      const metadata = await handleProtectedResourceMetadata(makeRequest("/.well-known/oauth-protected-resource"), deps);
+      expect(metadata.status, label).toBe(404);
+    }
+  });
+
+  it("answers 503 and publishes no metadata when agent access is switched off", async () => {
     for (const VERCEL_ENV of ["preview", "production"]) {
-      const deps = await buildDeps({
-        VERCEL: "1",
-        VERCEL_ENV,
-        NODE_ENV: "production",
-        MCP_OAUTH_ISSUER: FAKE_ISSUER,
-        MCP_OAUTH_JWKS_URI: `${FAKE_ISSUER}/.well-known/jwks.json`,
-        MCP_OAUTH_RESOURCE: FAKE_RESOURCE,
-        MCP_RESOURCE: FAKE_RESOURCE,
-        OAUTH_ISSUER: FAKE_ISSUER,
-        AGENT_ACCESS: "enabled",
-        MCP_DEV_FIXTURE_TOKEN: "t".repeat(40),
-      });
+      const deps = await buildDeps({ VERCEL: "1", VERCEL_ENV, NODE_ENV: "production", AGENT_ACCESS: "off", MCP_OAUTH_ISSUER: FAKE_ISSUER });
       expect(deps.agentAuth.mode, VERCEL_ENV).toBe("disabled");
-      expect(deps.agentAuth.protectedResource, VERCEL_ENV).toBeUndefined();
       expect((await handleMcpRequest(initialize(bearer("a".repeat(40))), deps)).status, VERCEL_ENV).toBe(503);
       const metadata = await handleProtectedResourceMetadata(makeRequest("/.well-known/oauth-protected-resource"), deps);
       expect(metadata.status, VERCEL_ENV).toBe(404);

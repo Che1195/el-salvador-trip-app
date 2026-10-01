@@ -31,9 +31,12 @@ This repository is public. It holds code and fictitious sample data only.
   a hosted database, and never ask for or handle a connection string: the
   database owner runs it.
 - Store changes must pass `tests/store-contract.test.ts` on both stores.
-- Remote agent access stays off in deployed environments. Nothing outside
-  tests may construct the OAuth authenticator until an integration has been
-  verified end to end and the owner approves.
+- Agents reach deployed environments only with per-agent keys that a
+  signed-in person creates in the app. A key is shown once and stored only
+  as its SHA-256; never log, store or return it anywhere else, and never
+  route its creation through `runMutation`, which stores results. Nothing
+  outside tests may construct the OAuth authenticator until an integration
+  has been verified end to end and the owner approves.
 - Read [docs/spec.md](docs/spec.md) before starting, and update it when scope,
   a decision, or the next action changes.
 - Use bun. Verify with `bun run check`.
