@@ -157,6 +157,11 @@ export interface Store {
   readonly kind: StorageKind;
   /** False for the in-memory fixture: its data is lost on restart and not shared. */
   readonly durable: boolean;
+  /**
+   * The database's schema version as it is right now, read fresh each call,
+   * or null for a store without one (the fixture).
+   */
+  readSchemaVersion(): Promise<number | null>;
   readonly scope: DataScope;
 
   /**

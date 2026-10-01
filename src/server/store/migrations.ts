@@ -25,8 +25,17 @@ export class MigrationRefusal extends Error {
   }
 }
 
-/** The schema version this build of the app is written against. */
-export const EXPECTED_SCHEMA_VERSION = 1;
+/**
+ * Schema versions this build of the app can run against. A version joins
+ * this list only after a review confirms the code works with it unchanged:
+ * reads, writes, stored JSON, constraints and undo. Version 2 adds one table
+ * that this code does not use, so the migration can be applied while this
+ * code is serving.
+ */
+export const ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2];
+
+/** The newest migration in db/migrations. */
+export const LATEST_SCHEMA_VERSION = 2;
 
 export const DATA_SCOPES: readonly DataScope[] = ["local", "preview", "production"];
 

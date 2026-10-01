@@ -27,7 +27,13 @@ This repository is public. It holds code and fictitious sample data only.
   lets one, and keep the guard in `commitChange`.
 - The in-memory store is a local fixture. Do not make production fall back to it.
 - Schema changes are new numbered files in `db/migrations`. Never edit an
-  applied migration, and never put data in one. Never run `db:migrate` against
+  applied migration, and never put data in one. Migrations only add: new
+  tables, new columns that are nullable or have a default, new indexes.
+  Never drop, rename or tighten anything the running code reads, because
+  each migration is applied to the databases before the code that needs it
+  is deployed, while the previous code is still serving. A version joins
+  `ACCEPTED_SCHEMA_VERSIONS` only after checking the serving code works with
+  it unchanged. Follow the three-step order in docs/storage.md. Never run `db:migrate` against
   a hosted database, and never ask for or handle a connection string: the
   database owner runs it.
 - Store changes must pass `tests/store-contract.test.ts` on both stores.

@@ -49,6 +49,8 @@ export type AgentAuthConfig =
 
 export interface AppConfig {
   deployment: Deployment;
+  /** Short git commit of this deployment (public: the repository is public). Null locally. */
+  commit: string | null;
   tripId: string;
   trustedOrigins: readonly string[];
   /** Local only: also accept the loopback origin the request itself arrived on. */
@@ -184,8 +186,10 @@ function resolveAgentAuth(env: Env, deployment: Deployment): AgentAuthConfig {
 export async function loadConfig(env: Env): Promise<AppConfig> {
   const deployment = resolveDeployment(env);
   const tripId = env.TRIP_ID && /^[A-Za-z0-9_-]{1,64}$/.test(env.TRIP_ID) ? env.TRIP_ID : "trip_1";
+  const sha = env.VERCEL_GIT_COMMIT_SHA;
   return {
     deployment,
+    commit: sha && /^[0-9a-f]{7,40}$/.test(sha) ? sha.slice(0, 7) : null,
     tripId,
     trustedOrigins: resolveTrustedOrigins(env, deployment),
     trustLoopbackRequestOrigin: deployment === "local",

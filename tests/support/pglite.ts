@@ -64,6 +64,7 @@ const DATA_TABLES = [
   "agent_grants",
   "agents",
   "rate_limits",
+  "removal_requests",
 ];
 
 let shared: Promise<SqlDatabase> | undefined;

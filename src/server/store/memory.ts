@@ -198,6 +198,10 @@ export class MemoryFixtureStore implements Store {
     return next;
   }
 
+  async readSchemaVersion(): Promise<number | null> {
+    return null;
+  }
+
   async hitRateLimit(
     limitKey: string,
     limit: number,

@@ -7,7 +7,7 @@
 
 import "server-only";
 import type { EntityKind, Scope } from "@/domain/model";
-import { currentSchemaVersion, EXPECTED_SCHEMA_VERSION, readDataScope } from "./migrations";
+import { ACCEPTED_SCHEMA_VERSIONS, currentSchemaVersion, readDataScope } from "./migrations";
 import { sqlState, type SqlDatabase, type SqlExecutor } from "./sql";
 import {
   StaleWriteError,
@@ -28,7 +28,8 @@ import {
 
 export type StoreUnavailableReason =
   | "schema_missing"
-  | "schema_version_mismatch"
+  | "schema_behind"
+  | "schema_unknown"
   | "scope_marker_missing";
 
 /** The database is reachable but must not be used. The reason is safe to log. */
@@ -417,14 +418,22 @@ export class PostgresStore implements Store {
 
   /**
    * Checks that the database is usable before anything reads or writes it:
-   * the schema must be exactly the version this code expects, and the
-   * database must carry an environment marker. The marker becomes the
-   * store's `scope`, which the caller compares with the deployment.
+   * its schema version must be one this code accepts, and it must carry an
+   * environment marker. The marker becomes the store's `scope`, which the
+   * caller compares with the deployment.
+   *
+   * The accepted list can include a version newer than the code needs, once
+   * that version has been reviewed as compatible. That lets a migration be
+   * applied while the previous code is still serving, before the code that
+   * needs it is deployed (see AGENTS.md and docs/storage.md).
    */
   static async open(db: SqlDatabase, retry: Partial<RetryOptions> = {}): Promise<PostgresStore> {
     const version = await currentSchemaVersion(db);
     if (version === 0) throw new StoreUnavailableError("schema_missing");
-    if (version !== EXPECTED_SCHEMA_VERSION) throw new StoreUnavailableError("schema_version_mismatch");
+    if (!ACCEPTED_SCHEMA_VERSIONS.includes(version)) {
+      const behind = version < Math.min(...ACCEPTED_SCHEMA_VERSIONS);
+      throw new StoreUnavailableError(behind ? "schema_behind" : "schema_unknown");
+    }
     const scope = await readDataScope(db);
     if (scope === null) throw new StoreUnavailableError("scope_marker_missing");
     return new PostgresStore(db, scope, { ...DEFAULT_RETRY, ...retry });
@@ -452,6 +461,19 @@ export class PostgresStore implements Store {
    * Durable fixed-window counter. The increment is a single atomic statement,
    * so it counts correctly across every server instance.
    */
+  /**
+   * Read fresh, so a long-lived server instance reports a migration as soon
+   * as it runs. The database itself stops the query after 3 seconds
+   * (`SET LOCAL` lasts only for this transaction), so a stuck read cannot
+   * keep holding one of the pool's few connections.
+   */
+  readSchemaVersion(): Promise<number> {
+    return this.db.transaction(async (tx) => {
+      await tx.query("SET LOCAL statement_timeout = '3s'");
+      return currentSchemaVersion(tx);
+    });
+  }
+
   async hitRateLimit(key: string, limit: number, windowMs: number, now: Date): Promise<RateLimitResult> {
     const nowMs = now.getTime();
     const windowStart = Math.floor(nowMs / windowMs) * windowMs;

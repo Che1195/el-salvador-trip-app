@@ -63,9 +63,23 @@ app reads it, and `storeMatchesDeployment` in `src/server/deps.ts` refuses a
 database whose marker differs from the deployment. A preview given
 production's connection string by mistake would refuse to serve.
 
-**Schema version.** The app checks that the database is at exactly the
-migration version the code expects (`EXPECTED_SCHEMA_VERSION`) and refuses
-otherwise. The app never changes the schema itself.
+**Schema version.** The app opens a database only if its schema version is
+in `ACCEPTED_SCHEMA_VERSIONS` (`src/server/store/migrations.ts`). That list
+may include one version newer than the code needs, after a review confirms
+the code works with it unchanged (reads, writes, stored JSON, constraints,
+undo). The app never changes the schema itself. `/api/health` reports the
+version it found (`schemaVersion`) and the deployed commit (`commit`).
+
+A schema change goes out in three steps, with a check after each:
+
+1. Merge a release that contains the new migration file and accepts both the
+   current and the new version. Check: each environment's `/api/health`
+   shows that release's `commit`.
+2. The database owner runs `bun run db:migrate` on preview, then production.
+   Check: each `/api/health` shows the new `schemaVersion`.
+3. Merge the code that uses the new schema, which accepts only the new
+   version. To roll back, redeploy the release from step 1. Old preview
+   links from before step 1 stop working once the preview database moves.
 
 **TLS.** In deployments, `DATABASE_URL` must say `sslmode=require` (or
 stricter), and the app then also verifies the server's certificate
@@ -74,7 +88,7 @@ explicitly, rather than relying on how the driver version reads `sslmode`.
 **Secrets.** The connection string is read from the deployment's environment
 at runtime. It is never logged, returned, or included in an error. Startup
 failures log a fixed reason only (`connection_failed`, `schema_missing`,
-`schema_version_mismatch`, `scope_marker_missing`). The migrate command prints its own refusals
+`schema_behind`, `scope_marker_missing`). The migrate command prints its own refusals
 (which hold only migration numbers, file names and environment names) or a
 fixed sentence with an error code such as `28P01`. It never prints a
 driver's message, stack or detail, since any of them can quote the connection
