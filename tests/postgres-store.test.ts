@@ -224,14 +224,55 @@ describe("opening the store", () => {
 
     vi.useFakeTimers();
     try {
-      const hanging = Object.create(store, { readSchemaVersion: { value: () => new Promise<number>(() => undefined) } });
-      const hangingDeps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, undefined, async () => hanging);
-      const answer = handleHealth(makeRequest("/api/health"), hangingDeps);
-      await vi.advanceTimersByTimeAsync(3_001);
-      expect((await (await answer).json()).schemaVersion).toBeNull();
+      let reads = 0;
+      let now = Date.parse("2031-03-01T12:00:00.000Z");
+      const hanging = Object.create(store, {
+        readSchemaVersion: {
+          value: () => {
+            reads += 1;
+            return new Promise<number>(() => undefined);
+          },
+        },
+      });
+      const hangingDeps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, () => new Date(now), async () => hanging);
+      // Requests keep coming across several reuse windows while the first read hangs.
+      for (let i = 0; i < 4; i++) {
+        const answer = handleHealth(makeRequest("/api/health"), hangingDeps);
+        await vi.advanceTimersByTimeAsync(3_001);
+        expect((await (await answer).json()).schemaVersion).toBeNull();
+        now += 31_000;
+      }
+      // Only one read was ever started, so at most one connection is tied up.
+      expect(reads).toBe(1);
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("asks the database to stop the schema read itself after 3 seconds", async () => {
+    const statements: string[] = [];
+    const recording: SqlDatabase = {
+      async query<Row>(text: string) {
+        statements.push(text.trim());
+        if (text.includes("schema_migrations")) return { rows: [{ version: 2, checksum: "x" }] as Row[], rowCount: 1 };
+        if (text.includes("data_scope")) return { rows: [{ value: "local" }] as Row[], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      },
+      async execScript() {},
+      async transaction<T>(fn: (tx: SqlExecutor) => Promise<T>) {
+        statements.push("BEGIN");
+        const value = await fn(recording);
+        statements.push("COMMIT");
+        return value;
+      },
+      async close() {},
+    };
+    const store = await PostgresStore.open(recording);
+    statements.length = 0;
+    expect(await store.readSchemaVersion()).toBe(2);
+    expect(statements[0]).toBe("BEGIN");
+    expect(statements[1]).toBe("SET LOCAL statement_timeout = '3s'");
+    expect(statements.at(-1)).toBe("COMMIT");
   });
 
   it("refuses a schema version nobody has reviewed for this code", async () => {

@@ -461,9 +461,17 @@ export class PostgresStore implements Store {
    * Durable fixed-window counter. The increment is a single atomic statement,
    * so it counts correctly across every server instance.
    */
-  /** Read fresh, so a long-lived server instance reports a migration as soon as it runs. */
+  /**
+   * Read fresh, so a long-lived server instance reports a migration as soon
+   * as it runs. The database itself stops the query after 3 seconds
+   * (`SET LOCAL` lasts only for this transaction), so a stuck read cannot
+   * keep holding one of the pool's few connections.
+   */
   readSchemaVersion(): Promise<number> {
-    return currentSchemaVersion(this.db);
+    return this.db.transaction(async (tx) => {
+      await tx.query("SET LOCAL statement_timeout = '3s'");
+      return currentSchemaVersion(tx);
+    });
   }
 
   async hitRateLimit(key: string, limit: number, windowMs: number, now: Date): Promise<RateLimitResult> {

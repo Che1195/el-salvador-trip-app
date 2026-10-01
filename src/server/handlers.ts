@@ -244,12 +244,15 @@ export async function handleActivity(request: Request, deps: Deps): Promise<Resp
   }
 }
 
-// The health route is public, so its database read is rationed: one reading
-// per server instance is reused for 30 seconds, simultaneous requests share
-// one read, and a read that takes longer than 3 seconds counts as unknown.
+// The health route is public, so its database read is rationed. One reading
+// per server instance is reused for 30 seconds. At most one read is ever in
+// flight: simultaneous requests share it, and a new one is not started until
+// the previous one has finished, even after its answer was given up on. A
+// request waits at most 3 seconds and then reports the version as unknown;
+// the store's own statement limit makes the read itself finish soon after.
 const SCHEMA_READ_REUSE_MS = 30_000;
 const SCHEMA_READ_DEADLINE_MS = 3_000;
-const schemaReads = new WeakMap<Store, { at: number; value: number | null; pending: Promise<number | null> | null }>();
+const schemaReads = new WeakMap<Store, { at: number; value: number | null; running: Promise<number | null> | null }>();
 
 function withinDeadline(read: Promise<number | null>): Promise<number | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -259,16 +262,21 @@ function withinDeadline(read: Promise<number | null>): Promise<number | null> {
   return Promise.race([read, deadline]).finally(() => clearTimeout(timer));
 }
 
-async function rationedSchemaVersion(store: Store, nowMs: number): Promise<number | null> {
-  const last = schemaReads.get(store);
-  if (last?.pending) return last.pending;
-  if (last && nowMs - last.at < SCHEMA_READ_REUSE_MS) return last.value;
-  // A failed or slow read reports null; its error text is never shown or logged.
-  const pending = withinDeadline(store.readSchemaVersion()).catch(() => null);
-  schemaReads.set(store, { at: last?.at ?? 0, value: last?.value ?? null, pending });
-  const value = await pending;
-  schemaReads.set(store, { at: nowMs, value, pending: null });
-  return value;
+function rationedSchemaVersion(store: Store, nowMs: number): Promise<number | null> {
+  const last = schemaReads.get(store) ?? { at: -Infinity, value: null, running: null };
+  if (last.running) return withinDeadline(last.running);
+  if (nowMs - last.at < SCHEMA_READ_REUSE_MS) return Promise.resolve(last.value);
+  // A failed read reports null; its error text is never shown or logged. The
+  // slot is freed only when the underlying read settles.
+  const running = store
+    .readSchemaVersion()
+    .catch(() => null)
+    .then((value) => {
+      schemaReads.set(store, { at: nowMs, value, running: null });
+      return value;
+    });
+  schemaReads.set(store, { ...last, running });
+  return withinDeadline(running);
 }
 
 /** Public. Reports which parts are set up. Carries no trip data and no secrets. */
