@@ -103,11 +103,28 @@ production. The preview database holds fixtures only.
 
 ## Setting up a database
 
-For the database owner. Not done yet.
+For the database owner. Do preview first (with sample data), then
+production (without). The Neon projects already exist; identify them by
+project ID, since both have a default branch named "production":
 
-1. Create the Neon project and copy its pooled connection string.
-2. In your own terminal, load the connection string without it being shown
-   or saved in your shell history (paste, then press Return):
+| Environment | Neon project | Project ID |
+|---|---|---|
+| Preview | trip-planner-development | `muddy-boat-80356130` |
+| Production | trip-planner-production | `restless-fire-29986419` |
+
+Two different connection strings are used, and neither is ever pasted into
+a chat or committed:
+
+- **Direct** (Neon's Connect dialog with connection pooling off): only for
+  running migrations from your terminal.
+- **Pooled** (pooling on; the host contains `-pooler`): only for
+  `DATABASE_URL` in Vercel, because serverless functions open many short
+  connections.
+
+1. In the Neon project, open **Connect**, choose database `neondb`, turn
+   connection pooling **off**, and copy the direct connection string.
+2. In your own terminal, load it without it being shown or saved in your
+   shell history (paste, then press Return):
 
 ```bash
 read -rs DATABASE_URL && export DATABASE_URL
@@ -134,9 +151,19 @@ bun run db:migrate -- --scope preview --seed-sample
 unset DATABASE_URL
 ```
 
-6. Set the same connection string as `DATABASE_URL` in Vercel, for that
-   environment only.
-7. Open `/api/health` on the deployment. `"storage": "postgres"` confirms it
+6. Back in **Connect**, turn connection pooling **on** and copy the pooled
+   string. Send it straight to Vercel for the matching environment only
+   (`preview` or `production`), without it appearing on screen:
+
+```bash
+read -rs POOLED && printf '%s' "$POOLED" | vercel env add DATABASE_URL preview --sensitive --yes; unset POOLED
+```
+
+   For production, replace `preview` with `production`. A preview also needs
+   its own `SESSION_SECRET` and `TRIP_PASSWORD_HASH` (added the same way as
+   production's) before anyone can sign in to it.
+7. Redeploy that environment. New variables only reach new deployments.
+8. Open `/api/health` on the deployment. `"storage": "postgres"` confirms it
    worked. `not_configured` means the app refused the database; the Vercel
    function log names the reason.
 
