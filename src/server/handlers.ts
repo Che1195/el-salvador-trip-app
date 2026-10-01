@@ -244,6 +244,33 @@ export async function handleActivity(request: Request, deps: Deps): Promise<Resp
   }
 }
 
+// The health route is public, so its database read is rationed: one reading
+// per server instance is reused for 30 seconds, simultaneous requests share
+// one read, and a read that takes longer than 3 seconds counts as unknown.
+const SCHEMA_READ_REUSE_MS = 30_000;
+const SCHEMA_READ_DEADLINE_MS = 3_000;
+const schemaReads = new WeakMap<Store, { at: number; value: number | null; pending: Promise<number | null> | null }>();
+
+function withinDeadline(read: Promise<number | null>): Promise<number | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), SCHEMA_READ_DEADLINE_MS);
+  });
+  return Promise.race([read, deadline]).finally(() => clearTimeout(timer));
+}
+
+async function rationedSchemaVersion(store: Store, nowMs: number): Promise<number | null> {
+  const last = schemaReads.get(store);
+  if (last?.pending) return last.pending;
+  if (last && nowMs - last.at < SCHEMA_READ_REUSE_MS) return last.value;
+  // A failed or slow read reports null; its error text is never shown or logged.
+  const pending = withinDeadline(store.readSchemaVersion()).catch(() => null);
+  schemaReads.set(store, { at: last?.at ?? 0, value: last?.value ?? null, pending });
+  const value = await pending;
+  schemaReads.set(store, { at: nowMs, value, pending: null });
+  return value;
+}
+
 /** Public. Reports which parts are set up. Carries no trip data and no secrets. */
 export async function handleHealth(_request: Request, deps: Deps): Promise<Response> {
   const { config, store } = deps;
@@ -255,7 +282,7 @@ export async function handleHealth(_request: Request, deps: Deps): Promise<Respo
     agentAccess: deps.agentAuth.mode,
     // Lets an operator confirm which code is live and which schema it found
     // before a migration or a dependent deploy. Neither is secret.
-    schemaVersion: store ? await store.readSchemaVersion().catch(() => null) : null,
+    schemaVersion: store ? await rationedSchemaVersion(store, deps.clock().getTime()) : null,
     commit: config.commit,
   });
 }

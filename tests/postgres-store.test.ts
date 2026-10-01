@@ -182,11 +182,56 @@ describe("opening the store", () => {
     await applyMigrations(v1, migrations.filter((m) => m.version === 1));
     await initializeDataScope(v1, "preview");
     const store = await PostgresStore.open(v1);
-    const deps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, undefined, async () => store);
+    let now = Date.parse("2031-03-01T12:00:00.000Z");
+    const deps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, () => new Date(now), async () => store);
     const version = async () => (await (await handleHealth(makeRequest("/api/health"), deps)).json()).schemaVersion;
     expect(await version()).toBe(1);
     await applyMigrations(v1, migrations);
+    // The public route reuses a reading for 30 seconds, then reads again.
+    now += 29_000;
+    expect(await version()).toBe(1);
+    now += 2_000;
     expect(await version()).toBe(LATEST_SCHEMA_VERSION);
+  });
+
+  it("shares one database read among simultaneous health requests", async () => {
+    const store = await PostgresStore.open(await migratedDatabase("preview"));
+    let reads = 0;
+    const counting = Object.create(store, {
+      readSchemaVersion: {
+        value: async () => {
+          reads += 1;
+          return store.readSchemaVersion();
+        },
+      },
+    });
+    const deps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, undefined, async () => counting);
+    await Promise.all(Array.from({ length: 10 }, () => handleHealth(makeRequest("/api/health"), deps)));
+    expect(reads).toBe(1);
+  });
+
+  it("reports null, and logs nothing, when the schema read fails or hangs", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const store = await PostgresStore.open(await migratedDatabase("preview"));
+    const failing = Object.create(store, {
+      readSchemaVersion: { value: async () => Promise.reject(new Error("password=SENTINEL_SECRET host=db.invalid")) },
+    });
+    const failingDeps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, undefined, async () => failing);
+    const text = await (await handleHealth(makeRequest("/api/health"), failingDeps)).text();
+    expect(JSON.parse(text).schemaVersion).toBeNull();
+    expect(text).not.toContain("SENTINEL");
+    expect(JSON.stringify(logged.mock.calls)).not.toContain("SENTINEL");
+
+    vi.useFakeTimers();
+    try {
+      const hanging = Object.create(store, { readSchemaVersion: { value: () => new Promise<number>(() => undefined) } });
+      const hangingDeps = await buildDeps({ VERCEL: "1", VERCEL_ENV: "preview" }, undefined, async () => hanging);
+      const answer = handleHealth(makeRequest("/api/health"), hangingDeps);
+      await vi.advanceTimersByTimeAsync(3_001);
+      expect((await (await answer).json()).schemaVersion).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a schema version nobody has reviewed for this code", async () => {
@@ -471,6 +516,38 @@ describe("the migrate command", () => {
     const store = await PostgresStore.open(db);
     expect(store.scope).toBe("production");
     expect(await store.transaction((tx) => tx.listEntities("trip_1", "packing"))).toEqual([]);
+  });
+
+  it("upgrades a version-1 database that holds data, keeping it and everything that works on it", async () => {
+    const db = emptyDatabase();
+    const all = loadMigrations(MIGRATIONS_DIR);
+    await applyMigrations(db, all.filter((m) => m.version === 1));
+    await initializeDataScope(db, "preview");
+    const before = await PostgresStore.open(db);
+    const { seedSampleTrip } = await import("@/server/sample-data");
+    await seedSampleTrip(before, "trip_1", new Date("2031-03-01T12:00:00.000Z"));
+    const packingBefore = await before.transaction((tx) => tx.listEntities("trip_1", "packing"));
+
+    const result = await runMigrate(options(db).opts);
+    expect(result.applied).toEqual([2]);
+    expect(result.version).toBe(2);
+
+    const after = await PostgresStore.open(db);
+    expect(await after.transaction((tx) => tx.listEntities("trip_1", "packing"))).toEqual(packingBefore);
+    const { executeOperation } = await import("@/server/operations");
+    const ctx = {
+      principal: { type: "web" as const, id: "web_upgrade", label: "Upgrade test", tripId: "trip_1" },
+      tripId: "trip_1",
+      store: after,
+      now: new Date("2031-03-02T12:00:00.000Z"),
+    };
+    const added = await executeOperation(ctx, "add_item", { section: "notes", data: { title: "After upgrade", body: "" } });
+    const id = (added.item as { id: string }).id;
+    await executeOperation(ctx, "remove_item", { section: "notes", id, expectedRevision: 1, confirm: true });
+    await executeOperation(ctx, "restore_item", { id });
+    const edited = await executeOperation(ctx, "update_item", { section: "notes", id, expectedRevision: 3, patch: { title: "Edited" } });
+    const undone = await executeOperation(ctx, "undo_change", { changeId: edited.changeId });
+    expect(((undone.item as { data: { title: string } }).data).title).toBe("After upgrade");
   });
 
   it("loads the sample trip into a preview database once", async () => {
