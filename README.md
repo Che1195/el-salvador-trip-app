@@ -16,7 +16,7 @@ They are never committed, and neither is any password, key or token.
 | Web app, domain rules, MCP server | Built. Tested on the in-memory fixture and on an in-process Postgres |
 | Durable storage | Neon Postgres connected for production and preview (2026-10-01); see [docs/storage.md](docs/storage.md) |
 | Production sign-in | Working. Previews have no sign-in secrets yet |
-| Remote agent access | Off. Every deployed environment answers 503 on `/api/mcp`. OAuth token checks are built and tested against a fake provider only |
+| Agent access | Per-agent keys created in the app (More, Agents). No hosted agent has connected yet. OAuth, needed for ChatGPT, is built against a fake provider only and stays off |
 | ChatGPT, Muse or other hosted agents | Not verified. See [docs/mcp.md](docs/mcp.md) |
 | Hosting | Vercel. Production has its database and sign-in secrets; previews have their own database and no sign-in yet |
 | Browser testing | Not done. The interface has been exercised over HTTP only |
