@@ -1,6 +1,6 @@
 # Per-agent keys: spec and plan
 
-Status: proposed, 2026-10-01. Builds on `main` at `36cec21`.
+Status: revised after gpt-6.1-sol review (REVISE, 5 findings, all accepted), 2026-10-01. Builds on `main` at `36cec21`.
 
 ## Goal
 
@@ -25,10 +25,12 @@ undoable), key expiry, and agent removals (still impossible for agents).
 | Permissions | Chosen at creation from presets: Full (`trip:read`, `trip:write`, `packing:read`, `packing:write`), Packing (`packing:read`, `packing:write`), Read only (`trip:read`) | Least privilege without a custom matrix |
 | Name | 1 to 40 characters, single line, unique (case-insensitive) among the trip's active agents | It is the attribution label in Activity |
 | Limit | At most 25 active agents per trip | Bounds abuse and storage |
-| Idempotency | None for `create_agent` | A replayed result would have to store the key. The UI blocks double submission |
+| Idempotency | None for `create_agent`; an `idempotencyKey` field is rejected | A replayed result would have to store the key. Server-side name uniqueness stops duplicates; the UI also blocks double submission |
+| Lost response | If creation's response never arrives, the agent may exist without anyone having its key. The screen says so, refreshes the list, and points to Revoke, then create again. Names are unique among active agents only, so a revoked name can be reused | No automatic retry, which could create a second agent |
 | Audit | `create_agent` and `revoke_agent` lines hold the agent id and outcome only | The audit log never holds content or secrets |
-| Turning it on | In every environment with a configured store, the key authenticator is active. With no key created, every MCP request is 401, so access stays closed until a person creates a key | No extra deploy step; still closed by default |
-| Kill switch | `AGENT_ACCESS=off` in an environment's variables turns all agent access off (503), regardless of keys | One switch to cut every agent at once |
+| Turning it on | In every environment with a configured store, the key authenticator is active. With no key created, no MCP request is accepted (401 for a missing or unknown key; 403, 405 and 429 still apply for bad origins, methods and floods) | No extra deploy step; still closed by default |
+| Stopping one agent | Revoke in the app. Takes effect on that agent's next request; a request already past authentication may finish | Revocation is stored in the database, so every server instance sees it at once |
+| Stopping all agents | Set `AGENT_ACCESS=off` for the environment and redeploy (about a minute). Environment variables only reach new deployments, so this is not instant | Simple and documented; per-agent revocation covers the urgent case |
 | Schema | No change. Uses `agents` and `agent_grants` as they are | No migration, so no deploy-order risk |
 | Local fixture | `MCP_DEV_FIXTURE_TOKEN` stays local-only and now just seeds one agent record for the same authenticator | One code path |
 | OAuth | Still never constructed outside tests | Unchanged |
@@ -43,6 +45,29 @@ or revoked keys get 401; a genuine key without a grant for this trip gets
 accepted. The rest of the request pipeline is unchanged: origin check, rate
 limits (30 per minute per address unauthenticated, 120 per minute per
 agent), body limit, scopes per tool, no removals.
+
+## Revisions after review
+
+gpt-6.1-sol (high, read-only) returned REVISE. Each finding was checked
+against the code and accepted:
+
+1. High: the kill switch was described as immediate, but dependencies are
+   cached per process and environment variables only reach new deployments.
+   Now documented as taking effect on redeploy; per-agent revocation is the
+   instant control.
+2. Medium: in `src/server/mcp/handler.ts`, authentication and rate limiting
+   ran outside the error catch, so a store failure there would escape the
+   fixed, `no-store` error response. The whole handler is now inside one
+   sanitized error boundary, with a fault-injection test.
+3. Medium: new tests would have run on the memory store only. The new suite
+   joins the "postgres" test project, and the negative cases below are added.
+   PGlite runs transactions one at a time, so genuine concurrent enforcement
+   on a real Postgres stays unverified and is recorded as such.
+4. Medium: a lost creation response could leave a keyless agent. Recovery is
+   now specified (see Decisions).
+5. Low: the key is generated inside each transaction attempt and checked
+   for an existing hash before insertion; the memory store now enforces the
+   same credential-hash uniqueness as the Postgres schema.
 
 ## Threats and answers
 
@@ -69,17 +94,28 @@ deployed agent access is always off (`tests/config.test.ts`,
 
 1. Replace `createFixtureAgentAuthenticator` with
    `createKeyAgentAuthenticator(store)`, allowed in every environment,
-   implementing the rules above, `mode: "keys"`.
+   implementing the rules above, `mode: "keys"`, with no `protectedResource`
+   (so OAuth metadata stays absent).
+1a. Wrap the whole of `handleMcpRequest` (authentication, rate limits, body
+   reading, protocol handling) in one error boundary that returns the fixed
+   JSON-RPC 500 with the private headers and logs only a fixed line.
+1b. Memory store `putAgent` throws when another agent already has the same
+   non-null credential hash, matching the UNIQUE column in Postgres.
 2. Config: `agentAuth` becomes `{ mode: "keys" }` or
    `{ mode: "disabled", reason }`. Disabled when `AGENT_ACCESS=off`.
    Local: still seeds the fixture agent when `MCP_DEV_FIXTURE_TOKEN` is set.
 3. Deps: build the key authenticator whenever a store exists and agent
    access is not off; otherwise the disabled one.
 4. Operation `create_agent` (web only, mutating, not destructive): input
-   `{ name, preset, confirm }`; requires `confirm: true`; validates name and
-   preset; enforces uniqueness and the limit inside the transaction;
-   generates the key; stores the hash and the grant; appends a
-   content-free audit line; returns `{ status, agent: AgentSummary, key }`.
+   `{ name, preset, confirm }` as a strict object (so `idempotencyKey` is
+   rejected); requires `confirm: true`; validates name and preset. Inside one
+   store transaction and NOT through `runMutation` (which stores results):
+   check uniqueness of the name among the trip's active agents
+   (case-insensitive) and the 25-agent limit; generate the key inside the
+   transaction callback, so a retried attempt makes a new one; confirm no
+   agent already has its hash; store the agent with the hash and one grant;
+   append a content-free audit line. Return
+   `{ status: "ok", agent: AgentSummary, key }`. Never log the key.
 5. Health reports `agentAccess: "keys"` or `"disabled"`.
 
 Acceptance, all as tests, on both stores where the harness allows:
@@ -96,7 +132,26 @@ Acceptance, all as tests, on both stores where the harness allows:
 - `AGENT_ACCESS=off` gives 503 even with a valid key; no store gives 503.
 - The key in a query string, a cookie, or the website password as a bearer
   get 401.
-- OAuth is still never constructed outside tests.
+- OAuth is still never constructed outside tests, and the metadata route
+  answers 404 in key mode.
+- Authorization header edge cases: wrong scheme, extra spaces, two
+  comma-joined values, and an over-long value get 401; a valid key with no
+  grant for this trip, or an empty grant, gets 403.
+- Name rules: a case-insensitive duplicate of an active agent is refused; a
+  revoked agent's name can be reused; the 26th active agent is refused while
+  25 revoked ones do not count.
+- Simultaneous creates with the same name produce exactly one agent; with
+  24 active agents, two simultaneous creates produce exactly one more.
+- A creation whose transaction fails part-way leaves no agent, no grant and
+  no audit line.
+- Nothing stored after creation contains the key: not the idempotency
+  records, not the audit log, not any listed field.
+- In a deployed configuration, `MCP_DEV_FIXTURE_TOKEN` creates no agent.
+- A store that throws during MCP authentication or rate limiting yields the
+  fixed 500 with `no-store`, and neither the response nor the logs contain
+  the sentinel text from the thrown error.
+- `tests/agent-keys.test.ts` is listed in the "postgres" project in
+  `vitest.config.mts`, so it runs on both stores.
 
 Check: `bun run check`.
 
@@ -109,7 +164,9 @@ field and the three presets (Full selected). On success the dialog shows the
 key once with a Copy button, the MCP address, the header to use
 (`Authorization: Bearer <key>`), and a plain warning that it will not be
 shown again. Closing the dialog discards the key. The list shows each
-agent's permissions and Revoke.
+agent's permissions and Revoke. If the request fails without a clear answer
+(network error or 5xx), the dialog says the agent may have been created,
+refreshes the list, and says to revoke it and create it again.
 
 Check: `bun run check`; manual check deferred to browser QA.
 
